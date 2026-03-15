@@ -1,0 +1,658 @@
+const path = require('path');
+const crypto = require('crypto');
+const { app } = require('electron');
+const { SCHEMA_SQL } = require('./schema');
+
+let db;
+
+function getDbPath() {
+  const userDataPath = app ? app.getPath('userData') : path.join(__dirname, '../../data');
+  return path.join(userDataPath, 'vqi_registry.db');
+}
+
+function hashPassword(password) {
+  return crypto.createHash('sha256').update(password + 'vqi_registry_salt_2024').digest('hex');
+}
+
+function initDatabase() {
+  const Database = require('better-sqlite3');
+  const dbPath = getDbPath();
+  db = new Database(dbPath);
+  db.pragma('foreign_keys = ON');
+  db.pragma('journal_mode = WAL');
+  db.exec(SCHEMA_SQL);
+  seedDefaultData();
+  return db;
+}
+
+function seedDefaultData() {
+  const adminExists = db.prepare('SELECT user_id FROM users WHERE username = ?').get('admin');
+  if (!adminExists) {
+    db.prepare(`INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)`)
+      .run('admin', hashPassword('admin123'), 'System Administrator', 'administrator');
+  }
+
+  const surgeonExists = db.prepare('SELECT surgeon_id FROM surgeons LIMIT 1').get();
+  if (!surgeonExists) {
+    const insertSurgeon = db.prepare(
+      `INSERT INTO surgeons (first_name, last_name, specialty) VALUES (?,?,?)`
+    );
+    insertSurgeon.run('John', 'Smith', 'Vascular Surgery');
+    insertSurgeon.run('Sarah', 'Johnson', 'Vascular Surgery');
+    insertSurgeon.run('Michael', 'Davis', 'Vascular Surgery');
+  }
+}
+
+// ─── AUTH ────────────────────────────────────────────────────────────────────
+
+function loginUser(username, password) {
+  const user = db.prepare('SELECT * FROM users WHERE username = ? AND active = 1').get(username);
+  if (!user) return null;
+  const hash = hashPassword(password);
+  if (hash !== user.password_hash) return null;
+  db.prepare(`UPDATE users SET last_login = datetime('now') WHERE user_id = ?`).run(user.user_id);
+  const { password_hash, ...safeUser } = user;
+  return safeUser;
+}
+
+// ─── PATIENTS ────────────────────────────────────────────────────────────────
+
+function getPatients(filters = {}) {
+  let query = `
+    SELECT p.*,
+      (SELECT COUNT(*) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS procedure_count,
+      (SELECT MAX(procedure_date) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS last_procedure_date
+    FROM patients p
+    WHERE 1=1
+  `;
+  const params = [];
+  if (filters.search) {
+    query += ` AND (p.first_name LIKE ? OR p.last_name LIKE ? OR p.mrn LIKE ?)`;
+    const s = `%${filters.search}%`;
+    params.push(s, s, s);
+  }
+  if (filters.sex) { query += ` AND p.sex = ?`; params.push(filters.sex); }
+  query += ` ORDER BY p.last_name, p.first_name`;
+  if (filters.limit) { query += ` LIMIT ? OFFSET ?`; params.push(filters.limit, filters.offset || 0); }
+  return db.prepare(query).all(...params);
+}
+
+function getPatientById(patientId) {
+  const patient = db.prepare('SELECT * FROM patients WHERE patient_id = ?').get(patientId);
+  if (!patient) return null;
+  patient.comorbidities = db.prepare('SELECT * FROM comorbidities WHERE patient_id = ?').get(patientId);
+  patient.medications = db.prepare('SELECT * FROM medications WHERE patient_id = ?').get(patientId);
+  patient.procedures = db.prepare(`
+    SELECT pr.*, s.first_name || ' ' || s.last_name AS surgeon_name
+    FROM procedures pr
+    LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
+    WHERE pr.patient_id = ?
+    ORDER BY pr.procedure_date DESC
+  `).all(patientId);
+  return patient;
+}
+
+function createPatient(data) {
+  const { comorbidities, medications, ...patientData } = data;
+  if (patientData.height_cm && patientData.weight_kg) {
+    const h = patientData.height_cm / 100;
+    patientData.bmi = parseFloat((patientData.weight_kg / (h * h)).toFixed(1));
+  }
+
+  const stmt = db.prepare(`
+    INSERT INTO patients (mrn, first_name, last_name, date_of_birth, sex, race, ethnicity,
+      height_cm, weight_kg, bmi, phone, email, address, insurance, referring_physician,
+      primary_care_provider, zip_code, consent_signed, enrollment_date)
+    VALUES (@mrn, @first_name, @last_name, @date_of_birth, @sex, @race, @ethnicity,
+      @height_cm, @weight_kg, @bmi, @phone, @email, @address, @insurance, @referring_physician,
+      @primary_care_provider, @zip_code, @consent_signed, @enrollment_date)
+  `);
+  const result = stmt.run(patientData);
+  const patientId = result.lastInsertRowid;
+
+  if (comorbidities) {
+    db.prepare(`INSERT OR REPLACE INTO comorbidities (patient_id, ${Object.keys(comorbidities).join(', ')})
+      VALUES (${patientId}, ${Object.keys(comorbidities).map(() => '?').join(', ')})`
+    ).run(...Object.values(comorbidities));
+  }
+  if (medications) {
+    db.prepare(`INSERT OR REPLACE INTO medications (patient_id, ${Object.keys(medications).join(', ')})
+      VALUES (${patientId}, ${Object.keys(medications).map(() => '?').join(', ')})`
+    ).run(...Object.values(medications));
+  }
+  return { patient_id: patientId };
+}
+
+function updatePatient(patientId, data) {
+  const { comorbidities, medications, ...patientData } = data;
+  if (patientData.height_cm && patientData.weight_kg) {
+    const h = patientData.height_cm / 100;
+    patientData.bmi = parseFloat((patientData.weight_kg / (h * h)).toFixed(1));
+  }
+
+  const fields = Object.keys(patientData).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE patients SET ${fields}, updated_at = datetime('now') WHERE patient_id = @patient_id`)
+    .run({ ...patientData, patient_id: patientId });
+
+  if (comorbidities) {
+    const existing = db.prepare('SELECT comorbidity_id FROM comorbidities WHERE patient_id = ?').get(patientId);
+    if (existing) {
+      const fields2 = Object.keys(comorbidities).map(k => `${k} = @${k}`).join(', ');
+      db.prepare(`UPDATE comorbidities SET ${fields2} WHERE patient_id = @patient_id`)
+        .run({ ...comorbidities, patient_id: patientId });
+    } else {
+      db.prepare(`INSERT INTO comorbidities (patient_id, ${Object.keys(comorbidities).join(', ')})
+        VALUES (@patient_id, ${Object.keys(comorbidities).map(k => `@${k}`).join(', ')})`
+      ).run({ ...comorbidities, patient_id: patientId });
+    }
+  }
+  if (medications) {
+    const existing = db.prepare('SELECT medication_id FROM medications WHERE patient_id = ?').get(patientId);
+    if (existing) {
+      const fields2 = Object.keys(medications).map(k => `${k} = @${k}`).join(', ');
+      db.prepare(`UPDATE medications SET ${fields2} WHERE patient_id = @patient_id`)
+        .run({ ...medications, patient_id: patientId });
+    } else {
+      db.prepare(`INSERT INTO medications (patient_id, ${Object.keys(medications).join(', ')})
+        VALUES (@patient_id, ${Object.keys(medications).map(k => `@${k}`).join(', ')})`
+      ).run({ ...medications, patient_id: patientId });
+    }
+  }
+  return { success: true };
+}
+
+function deletePatient(patientId) {
+  db.prepare('DELETE FROM patients WHERE patient_id = ?').run(patientId);
+  return { success: true };
+}
+
+// ─── PROCEDURES ──────────────────────────────────────────────────────────────
+
+function getProcedures(filters = {}) {
+  let query = `
+    SELECT pr.*,
+      p.first_name || ' ' || p.last_name AS patient_name,
+      p.mrn,
+      p.date_of_birth,
+      s.first_name || ' ' || s.last_name AS surgeon_name,
+      po.stroke, po.myocardial_infarction, po.death_30_day, po.hospital_days
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
+    LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    WHERE 1=1
+  `;
+  const params = [];
+  if (filters.patientId) { query += ` AND pr.patient_id = ?`; params.push(filters.patientId); }
+  if (filters.procedureType) { query += ` AND pr.procedure_type = ?`; params.push(filters.procedureType); }
+  if (filters.surgeonId) { query += ` AND pr.surgeon_id = ?`; params.push(filters.surgeonId); }
+  if (filters.dateFrom) { query += ` AND pr.procedure_date >= ?`; params.push(filters.dateFrom); }
+  if (filters.dateTo) { query += ` AND pr.procedure_date <= ?`; params.push(filters.dateTo); }
+  if (filters.urgency) { query += ` AND pr.urgency = ?`; params.push(filters.urgency); }
+  if (filters.search) {
+    query += ` AND (p.first_name LIKE ? OR p.last_name LIKE ? OR p.mrn LIKE ?)`;
+    const s = `%${filters.search}%`;
+    params.push(s, s, s);
+  }
+  query += ` ORDER BY pr.procedure_date DESC`;
+  if (filters.limit) { query += ` LIMIT ? OFFSET ?`; params.push(filters.limit, filters.offset || 0); }
+  return db.prepare(query).all(...params);
+}
+
+function getProcedureById(procedureId) {
+  const proc = db.prepare(`
+    SELECT pr.*,
+      p.first_name || ' ' || p.last_name AS patient_name, p.mrn, p.date_of_birth, p.sex,
+      s.first_name || ' ' || s.last_name AS surgeon_name
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
+    WHERE pr.procedure_id = ?
+  `).get(procedureId);
+  if (!proc) return null;
+  proc.intraoperative = db.prepare('SELECT * FROM intraoperative WHERE procedure_id = ?').get(procedureId);
+  proc.postoperative = db.prepare('SELECT * FROM postoperative WHERE procedure_id = ?').get(procedureId);
+  proc.followups = db.prepare('SELECT * FROM followup WHERE procedure_id = ? ORDER BY followup_date').all(procedureId);
+  proc.evar_module = db.prepare('SELECT * FROM evar_module WHERE procedure_id = ?').get(procedureId);
+  proc.carotid_module = db.prepare('SELECT * FROM carotid_module WHERE procedure_id = ?').get(procedureId);
+  proc.pad_module = db.prepare('SELECT * FROM pad_module WHERE procedure_id = ?').get(procedureId);
+  return proc;
+}
+
+function createProcedure(data) {
+  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, ...procData } = data;
+  const stmt = db.prepare(`
+    INSERT INTO procedures (patient_id, procedure_type, procedure_date, surgeon_id, assistant,
+      hospital, urgency, anesthesia_type, indication, symptom_status, admission_type,
+      preop_imaging, stenosis_percent, aneurysm_diameter, aneurysm_growth_rate, abi_preop,
+      toe_pressure, rutherford_class, wound_classification, infection_present, tissue_loss,
+      baseline_creatinine, hemoglobin, platelet_count, notes, created_by)
+    VALUES (@patient_id, @procedure_type, @procedure_date, @surgeon_id, @assistant,
+      @hospital, @urgency, @anesthesia_type, @indication, @symptom_status, @admission_type,
+      @preop_imaging, @stenosis_percent, @aneurysm_diameter, @aneurysm_growth_rate, @abi_preop,
+      @toe_pressure, @rutherford_class, @wound_classification, @infection_present, @tissue_loss,
+      @baseline_creatinine, @hemoglobin, @platelet_count, @notes, @created_by)
+  `);
+  const result = stmt.run(procData);
+  const procedureId = result.lastInsertRowid;
+
+  if (intraoperative) upsertIntraoperative(procedureId, intraoperative);
+  if (postoperative) upsertPostoperative(procedureId, postoperative);
+  if (evar_module) upsertModule('evar_module', 'evar_id', procedureId, evar_module);
+  if (carotid_module) upsertModule('carotid_module', 'carotid_id', procedureId, carotid_module);
+  if (pad_module) upsertModule('pad_module', 'pad_id', procedureId, pad_module);
+
+  return { procedure_id: procedureId };
+}
+
+function updateProcedure(procedureId, data) {
+  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, ...procData } = data;
+  if (Object.keys(procData).length > 0) {
+    const fields = Object.keys(procData).map(k => `${k} = @${k}`).join(', ');
+    db.prepare(`UPDATE procedures SET ${fields}, updated_at = datetime('now') WHERE procedure_id = @procedure_id`)
+      .run({ ...procData, procedure_id: procedureId });
+  }
+  if (intraoperative) upsertIntraoperative(procedureId, intraoperative);
+  if (postoperative) upsertPostoperative(procedureId, postoperative);
+  if (evar_module) upsertModule('evar_module', 'evar_id', procedureId, evar_module);
+  if (carotid_module) upsertModule('carotid_module', 'carotid_id', procedureId, carotid_module);
+  if (pad_module) upsertModule('pad_module', 'pad_id', procedureId, pad_module);
+  return { success: true };
+}
+
+function upsertIntraoperative(procedureId, data) {
+  const existing = db.prepare('SELECT intraop_id FROM intraoperative WHERE procedure_id = ?').get(procedureId);
+  if (existing) {
+    const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+    db.prepare(`UPDATE intraoperative SET ${fields} WHERE procedure_id = @procedure_id`)
+      .run({ ...data, procedure_id: procedureId });
+  } else {
+    const cols = ['procedure_id', ...Object.keys(data)];
+    const vals = cols.map(c => `@${c}`).join(', ');
+    db.prepare(`INSERT INTO intraoperative (${cols.join(', ')}) VALUES (${vals})`)
+      .run({ ...data, procedure_id: procedureId });
+  }
+}
+
+function upsertPostoperative(procedureId, data) {
+  const existing = db.prepare('SELECT postop_id FROM postoperative WHERE procedure_id = ?').get(procedureId);
+  if (existing) {
+    const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+    db.prepare(`UPDATE postoperative SET ${fields} WHERE procedure_id = @procedure_id`)
+      .run({ ...data, procedure_id: procedureId });
+  } else {
+    const cols = ['procedure_id', ...Object.keys(data)];
+    const vals = cols.map(c => `@${c}`).join(', ');
+    db.prepare(`INSERT INTO postoperative (${cols.join(', ')}) VALUES (${vals})`)
+      .run({ ...data, procedure_id: procedureId });
+  }
+}
+
+function upsertModule(tableName, pkName, procedureId, data) {
+  const existing = db.prepare(`SELECT ${pkName} FROM ${tableName} WHERE procedure_id = ?`).get(procedureId);
+  if (existing) {
+    const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+    db.prepare(`UPDATE ${tableName} SET ${fields} WHERE procedure_id = @procedure_id`)
+      .run({ ...data, procedure_id: procedureId });
+  } else {
+    const cols = ['procedure_id', ...Object.keys(data)];
+    const vals = cols.map(c => `@${c}`).join(', ');
+    db.prepare(`INSERT INTO ${tableName} (${cols.join(', ')}) VALUES (${vals})`)
+      .run({ ...data, procedure_id: procedureId });
+  }
+}
+
+function deleteProcedure(procedureId) {
+  db.prepare('DELETE FROM procedures WHERE procedure_id = ?').run(procedureId);
+  return { success: true };
+}
+
+// ─── FOLLOW-UP ───────────────────────────────────────────────────────────────
+
+function getFollowups(procedureId) {
+  return db.prepare('SELECT * FROM followup WHERE procedure_id = ? ORDER BY followup_date').all(procedureId);
+}
+
+function createFollowup(data) {
+  const cols = Object.keys(data);
+  const vals = cols.map(c => `@${c}`).join(', ');
+  const result = db.prepare(`INSERT INTO followup (${cols.join(', ')}) VALUES (${vals})`).run(data);
+  return { followup_id: result.lastInsertRowid };
+}
+
+function updateFollowup(followupId, data) {
+  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE followup SET ${fields} WHERE followup_id = @followup_id`)
+    .run({ ...data, followup_id: followupId });
+  return { success: true };
+}
+
+function deleteFollowup(followupId) {
+  db.prepare('DELETE FROM followup WHERE followup_id = ?').run(followupId);
+  return { success: true };
+}
+
+// ─── SURGEONS ────────────────────────────────────────────────────────────────
+
+function getSurgeons() {
+  return db.prepare('SELECT * FROM surgeons WHERE active = 1 ORDER BY last_name, first_name').all();
+}
+
+function createSurgeon(data) {
+  const result = db.prepare(
+    `INSERT INTO surgeons (first_name, last_name, specialty, license_number) VALUES (?,?,?,?)`
+  ).run(data.first_name, data.last_name, data.specialty, data.license_number);
+  return { surgeon_id: result.lastInsertRowid };
+}
+
+function updateSurgeon(surgeonId, data) {
+  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE surgeons SET ${fields} WHERE surgeon_id = @surgeon_id`)
+    .run({ ...data, surgeon_id: surgeonId });
+  return { success: true };
+}
+
+// ─── USERS ───────────────────────────────────────────────────────────────────
+
+function getUsers() {
+  return db.prepare('SELECT user_id, username, full_name, role, active, last_login, created_at FROM users ORDER BY full_name').all();
+}
+
+function createUser(data) {
+  const hash = hashPassword(data.password);
+  const result = db.prepare(
+    `INSERT INTO users (username, password_hash, full_name, role) VALUES (?,?,?,?)`
+  ).run(data.username, hash, data.full_name, data.role);
+  return { user_id: result.lastInsertRowid };
+}
+
+function updateUser(userId, data) {
+  if (data.password) {
+    data.password_hash = hashPassword(data.password);
+    delete data.password;
+  }
+  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE users SET ${fields} WHERE user_id = @user_id`)
+    .run({ ...data, user_id: userId });
+  return { success: true };
+}
+
+function deleteUser(userId) {
+  db.prepare('UPDATE users SET active = 0 WHERE user_id = ?').run(userId);
+  return { success: true };
+}
+
+// ─── REPORTS / DASHBOARD ─────────────────────────────────────────────────────
+
+function getDashboardStats() {
+  const totalPatients = db.prepare('SELECT COUNT(*) AS count FROM patients').get().count;
+  const totalProcedures = db.prepare('SELECT COUNT(*) AS count FROM procedures').get().count;
+
+  const strokeRate = db.prepare(`
+    SELECT ROUND(SUM(CASE WHEN po.stroke = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*), 1) * 100, 2) AS rate
+    FROM postoperative po
+    JOIN procedures pr ON po.procedure_id = pr.procedure_id
+  `).get().rate || 0;
+
+  const mortalityRate = db.prepare(`
+    SELECT ROUND(SUM(CASE WHEN po.death_30_day = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*), 1) * 100, 2) AS rate
+    FROM postoperative po
+  `).get().rate || 0;
+
+  const reinterventionRate = db.prepare(`
+    SELECT ROUND(SUM(CASE WHEN f.reintervention = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*), 1) * 100, 2) AS rate
+    FROM followup f
+  `).get().rate || 0;
+
+  const limbSalvageRate = db.prepare(`
+    SELECT ROUND(SUM(CASE WHEN po.amputation = 0 THEN 1.0 ELSE 0 END) / MAX(COUNT(*), 1) * 100, 2) AS rate
+    FROM postoperative po
+    JOIN procedures pr ON po.procedure_id = pr.procedure_id
+    WHERE pr.procedure_type IN ('Peripheral Bypass','Peripheral Angioplasty/Stenting','Amputation')
+  `).get().rate || 100;
+
+  const miRate = db.prepare(`
+    SELECT ROUND(SUM(CASE WHEN po.myocardial_infarction = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*), 1) * 100, 2) AS rate
+    FROM postoperative po
+  `).get().rate || 0;
+
+  const monthlyVolume = db.prepare(`
+    SELECT strftime('%Y-%m', procedure_date) AS month, COUNT(*) AS count,
+      procedure_type
+    FROM procedures
+    WHERE procedure_date >= date('now', '-12 months')
+    GROUP BY month, procedure_type
+    ORDER BY month
+  `).all();
+
+  const procedureTypeBreakdown = db.prepare(`
+    SELECT procedure_type, COUNT(*) AS count
+    FROM procedures
+    GROUP BY procedure_type
+    ORDER BY count DESC
+  `).all();
+
+  const surgeonVolume = db.prepare(`
+    SELECT s.first_name || ' ' || s.last_name AS surgeon_name, COUNT(*) AS count
+    FROM procedures pr
+    LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
+    GROUP BY pr.surgeon_id
+    ORDER BY count DESC
+    LIMIT 10
+  `).all();
+
+  const recentPatients = db.prepare(`
+    SELECT p.patient_id, p.mrn, p.first_name || ' ' || p.last_name AS name,
+      p.date_of_birth, p.created_at,
+      (SELECT COUNT(*) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS proc_count
+    FROM patients p
+    ORDER BY p.created_at DESC LIMIT 5
+  `).all();
+
+  const upcomingFollowups = db.prepare(`
+    SELECT p.first_name || ' ' || p.last_name AS patient_name, p.mrn,
+      po.followup_date, pr.procedure_type, pr.procedure_date
+    FROM postoperative po
+    JOIN procedures pr ON po.procedure_id = pr.procedure_id
+    JOIN patients p ON pr.patient_id = p.patient_id
+    WHERE po.followup_scheduled = 1 AND po.followup_date >= date('now')
+    ORDER BY po.followup_date LIMIT 10
+  `).all();
+
+  return {
+    totalPatients, totalProcedures, strokeRate, mortalityRate,
+    reinterventionRate, limbSalvageRate, miRate,
+    monthlyVolume, procedureTypeBreakdown, surgeonVolume,
+    recentPatients, upcomingFollowups
+  };
+}
+
+function getReportData(reportType, filters = {}) {
+  const { dateFrom, dateTo, surgeonId, procedureType } = filters;
+  let dateFilter = '';
+  const params = [];
+  if (dateFrom) { dateFilter += ` AND pr.procedure_date >= ?`; params.push(dateFrom); }
+  if (dateTo) { dateFilter += ` AND pr.procedure_date <= ?`; params.push(dateTo); }
+  if (surgeonId) { dateFilter += ` AND pr.surgeon_id = ?`; params.push(surgeonId); }
+
+  switch (reportType) {
+    case 'baseline_characteristics': {
+      return db.prepare(`
+        SELECT
+          COUNT(*) AS total_patients,
+          ROUND(AVG((julianday('now') - julianday(p.date_of_birth)) / 365.25), 1) AS mean_age,
+          SUM(CASE WHEN p.sex = 'Male' THEN 1 ELSE 0 END) AS male_count,
+          SUM(CASE WHEN c.diabetes = 1 THEN 1 ELSE 0 END) AS diabetes_count,
+          SUM(CASE WHEN c.hypertension = 1 THEN 1 ELSE 0 END) AS hypertension_count,
+          SUM(CASE WHEN c.smoking_status = 'Current' THEN 1 ELSE 0 END) AS current_smokers,
+          SUM(CASE WHEN c.coronary_artery_disease = 1 THEN 1 ELSE 0 END) AS cad_count,
+          SUM(CASE WHEN c.copd = 1 THEN 1 ELSE 0 END) AS copd_count,
+          SUM(CASE WHEN c.dialysis = 1 THEN 1 ELSE 0 END) AS dialysis_count,
+          SUM(CASE WHEN c.prior_stroke = 1 THEN 1 ELSE 0 END) AS prior_stroke_count
+        FROM patients p
+        LEFT JOIN comorbidities c ON p.patient_id = c.patient_id
+      `).get();
+    }
+    case 'procedural_outcomes': {
+      const typeFilter = procedureType ? ` AND pr.procedure_type = ?` : '';
+      if (procedureType) params.push(procedureType);
+      return db.prepare(`
+        SELECT
+          pr.procedure_type,
+          COUNT(*) AS procedure_count,
+          ROUND(AVG(po.hospital_days), 1) AS avg_hospital_days,
+          SUM(CASE WHEN po.stroke = 1 THEN 1 ELSE 0 END) AS stroke_count,
+          ROUND(SUM(CASE WHEN po.stroke = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*),1) * 100, 2) AS stroke_rate,
+          SUM(CASE WHEN po.myocardial_infarction = 1 THEN 1 ELSE 0 END) AS mi_count,
+          ROUND(SUM(CASE WHEN po.myocardial_infarction = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*),1) * 100, 2) AS mi_rate,
+          SUM(CASE WHEN po.death_30_day = 1 THEN 1 ELSE 0 END) AS mortality_count,
+          ROUND(SUM(CASE WHEN po.death_30_day = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*),1) * 100, 2) AS mortality_rate,
+          SUM(CASE WHEN po.reoperation = 1 THEN 1 ELSE 0 END) AS reoperation_count
+        FROM procedures pr
+        LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+        WHERE 1=1 ${dateFilter} ${typeFilter}
+        GROUP BY pr.procedure_type
+        ORDER BY procedure_count DESC
+      `).all(...params);
+    }
+    case 'surgeon_volume': {
+      return db.prepare(`
+        SELECT
+          s.first_name || ' ' || s.last_name AS surgeon_name,
+          pr.procedure_type,
+          COUNT(*) AS procedure_count,
+          ROUND(SUM(CASE WHEN po.death_30_day = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*),1) * 100, 2) AS mortality_rate,
+          ROUND(SUM(CASE WHEN po.stroke = 1 THEN 1.0 ELSE 0 END) / MAX(COUNT(*),1) * 100, 2) AS stroke_rate,
+          ROUND(AVG(po.hospital_days), 1) AS avg_los
+        FROM procedures pr
+        LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
+        LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+        WHERE 1=1 ${dateFilter}
+        GROUP BY pr.surgeon_id, pr.procedure_type
+        ORDER BY surgeon_name, procedure_count DESC
+      `).all(...params);
+    }
+    case 'carotid_outcomes': {
+      return db.prepare(`
+        SELECT
+          pr.procedure_date, p.mrn,
+          p.first_name || ' ' || p.last_name AS patient_name,
+          c.symptomatic, c.stenosis_percent, c.procedure_subtype,
+          c.shunt_used, c.patch_used,
+          po.stroke, po.death_30_day, po.hospital_days,
+          c.cranial_nerve_injury, c.periop_stroke
+        FROM procedures pr
+        JOIN patients p ON pr.patient_id = p.patient_id
+        JOIN carotid_module c ON c.procedure_id = pr.procedure_id
+        LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+        WHERE 1=1 ${dateFilter}
+        ORDER BY pr.procedure_date DESC
+      `).all(...params);
+    }
+    case 'aaa_outcomes': {
+      return db.prepare(`
+        SELECT
+          pr.procedure_date, p.mrn,
+          p.first_name || ' ' || p.last_name AS patient_name,
+          e.aneurysm_diameter_mm, e.aneurysm_location, e.rupture_status,
+          e.endograft_manufacturer, e.endoleak_type,
+          po.death_30_day, po.renal_failure, po.hospital_days,
+          po.death_in_hospital
+        FROM procedures pr
+        JOIN patients p ON pr.patient_id = p.patient_id
+        JOIN evar_module e ON e.procedure_id = pr.procedure_id
+        LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+        WHERE 1=1 ${dateFilter}
+        ORDER BY pr.procedure_date DESC
+      `).all(...params);
+    }
+    case 'pad_outcomes': {
+      return db.prepare(`
+        SELECT
+          pr.procedure_date, p.mrn,
+          p.first_name || ' ' || p.last_name AS patient_name,
+          pad.indication, pad.rutherford_class, pad.conduit_type,
+          pad.inflow_artery, pad.outflow_artery,
+          pad.abi_preop, pad.abi_postop,
+          po.amputation, po.death_30_day, po.hospital_days
+        FROM procedures pr
+        JOIN patients p ON pr.patient_id = p.patient_id
+        JOIN pad_module pad ON pad.procedure_id = pr.procedure_id
+        LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+        WHERE 1=1 ${dateFilter}
+        ORDER BY pr.procedure_date DESC
+      `).all(...params);
+    }
+    case 'followup_summary': {
+      return db.prepare(`
+        SELECT
+          f.followup_interval,
+          COUNT(*) AS followup_count,
+          SUM(CASE WHEN f.alive = 1 THEN 1 ELSE 0 END) AS alive_count,
+          SUM(CASE WHEN f.reintervention = 1 THEN 1 ELSE 0 END) AS reintervention_count,
+          SUM(CASE WHEN f.stroke = 1 THEN 1 ELSE 0 END) AS stroke_count,
+          SUM(CASE WHEN f.amputation = 1 THEN 1 ELSE 0 END) AS amputation_count,
+          ROUND(AVG(f.abi), 2) AS avg_abi
+        FROM followup f
+        JOIN procedures pr ON f.procedure_id = pr.procedure_id
+        WHERE 1=1 ${dateFilter}
+        GROUP BY f.followup_interval
+        ORDER BY CASE f.followup_interval
+          WHEN '30 Day' THEN 1 WHEN '6 Month' THEN 2 WHEN '1 Year' THEN 3
+          WHEN '2 Year' THEN 4 WHEN '3 Year' THEN 5 WHEN '4 Year' THEN 6
+          WHEN '5 Year' THEN 7 WHEN 'Annual' THEN 8 END
+      `).all(...params);
+    }
+    default:
+      return [];
+  }
+}
+
+function exportPatientData(filters = {}) {
+  const patients = db.prepare(`
+    SELECT p.*, c.smoking_status, c.hypertension, c.diabetes, c.hyperlipidemia,
+      c.coronary_artery_disease, c.copd, c.ckd_stage, c.dialysis, c.prior_stroke
+    FROM patients p
+    LEFT JOIN comorbidities c ON p.patient_id = c.patient_id
+    ORDER BY p.last_name, p.first_name
+  `).all();
+  return patients;
+}
+
+function exportProcedureData(filters = {}) {
+  return db.prepare(`
+    SELECT pr.procedure_id, p.mrn, p.first_name || ' ' || p.last_name AS patient_name,
+      p.date_of_birth, p.sex,
+      pr.procedure_type, pr.procedure_date, pr.urgency, pr.anesthesia_type,
+      s.first_name || ' ' || s.last_name AS surgeon_name,
+      io.duration_minutes, io.blood_loss_ml, io.technical_success,
+      po.icu_admission, po.hospital_days, po.stroke, po.myocardial_infarction,
+      po.renal_failure, po.reoperation, po.death_30_day, po.discharge_status
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
+    LEFT JOIN intraoperative io ON io.procedure_id = pr.procedure_id
+    LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    ORDER BY pr.procedure_date DESC
+  `).all();
+}
+
+function backupDatabase(destPath) {
+  return new Promise((resolve, reject) => {
+    db.backup(destPath)
+      .then(() => resolve({ success: true, path: destPath }))
+      .catch(err => reject(err));
+  });
+}
+
+module.exports = {
+  initDatabase, loginUser,
+  getPatients, getPatientById, createPatient, updatePatient, deletePatient,
+  getProcedures, getProcedureById, createProcedure, updateProcedure, deleteProcedure,
+  getFollowups, createFollowup, updateFollowup, deleteFollowup,
+  getSurgeons, createSurgeon, updateSurgeon,
+  getUsers, createUser, updateUser, deleteUser,
+  getDashboardStats, getReportData,
+  exportPatientData, exportProcedureData, backupDatabase,
+  upsertIntraoperative, upsertPostoperative, upsertModule
+};
