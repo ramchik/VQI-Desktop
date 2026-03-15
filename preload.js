@@ -47,5 +47,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Backup
   createBackup: () => ipcRenderer.invoke('backup:create'),
   getDataPath: () => ipcRenderer.invoke('app:getDataPath'),
-  openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath)
+  openPath: (filePath) => ipcRenderer.invoke('shell:openPath', filePath),
+
+  // Red-flag alerts
+  getRedFlags: () => ipcRenderer.invoke('alerts:getRedFlags'),
+
+  // Research / Cohort
+  getCohort: (filters) => ipcRenderer.invoke('research:getCohort', filters),
+  getTable1Stats: (patientIds) => ipcRenderer.invoke('research:getTable1', patientIds),
+  getTimeToEvent: (patientIds) => ipcRenderer.invoke('research:getTimeToEvent', patientIds),
+
+  // Devices
+  getDevices: (procedureId) => ipcRenderer.invoke('devices:getByProcedure', procedureId),
+  createDevice: (data) => ipcRenderer.invoke('devices:create', data),
+  updateDevice: (id, data) => ipcRenderer.invoke('devices:update', { id, data }),
+  deleteDevice: (id) => ipcRenderer.invoke('devices:delete', id),
+
+  // Photos
+  getPhotos: (procedureId) => ipcRenderer.invoke('photos:getByProcedure', procedureId),
+  uploadPhotos: (procedureId, patientId, meta) => ipcRenderer.invoke('photos:upload', { procedureId, patientId, meta }),
+  deletePhoto: (photoId) => ipcRenderer.invoke('photos:delete', photoId),
+  openPhotoFile: (filePath) => ipcRenderer.invoke('photos:openFile', filePath),
+
+  // Venous module
+  upsertVenous: (procedureId, data) => ipcRenderer.invoke('venous:upsert', { procedureId, data })
 });

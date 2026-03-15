@@ -10,6 +10,7 @@ import Reports from './components/reports/Reports';
 import Search from './components/search/Search';
 import UserManagement from './components/admin/UserManagement';
 import BackupManager from './components/admin/BackupManager';
+import ResearchModule from './components/research/ResearchModule';
 
 export const AppContext = createContext(null);
 
@@ -80,6 +81,7 @@ function ViewRenderer({ view, params }) {
     case 'procedure-edit': return <ProcedureForm procedureId={params.procedureId} />;
     case 'followup': return <FollowUpForm procedureId={params.procedureId} />;
     case 'reports': return <Reports />;
+    case 'research': return <ResearchModule />;
     case 'search': return <Search />;
     case 'users': return <UserManagement />;
     case 'backup': return <BackupManager />;
