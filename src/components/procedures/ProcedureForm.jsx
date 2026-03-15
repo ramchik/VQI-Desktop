@@ -100,6 +100,10 @@ export default function ProcedureForm({ procedureId, patientId }) {
   const [pad, setPad] = useState(EMPTY_PAD);
   const [loading, setLoading] = useState(!!procedureId);
   const [saving, setSaving] = useState(false);
+  const [selectedPatient, setSelectedPatient] = useState(null);
+  const [patientSearch, setPatientSearch] = useState('');
+  const [patientResults, setPatientResults] = useState([]);
+  const [showPatientDropdown, setShowPatientDropdown] = useState(false);
 
   const isEdit = !!procedureId;
   const procType = proc.procedure_type;
@@ -111,6 +115,14 @@ export default function ProcedureForm({ procedureId, patientId }) {
     loadSurgeons();
     if (procedureId) loadProcedure();
   }, [procedureId]);
+
+  useEffect(() => {
+    if (patientId) {
+      window.electronAPI.getPatientById(patientId).then(res => {
+        if (res.success && res.data) setSelectedPatient(res.data);
+      });
+    }
+  }, [patientId]);
 
   async function loadSurgeons() {
     const res = await window.electronAPI.getSurgeons();
@@ -134,6 +146,29 @@ export default function ProcedureForm({ procedureId, patientId }) {
 
   function stripNulls(obj) {
     return Object.fromEntries(Object.entries(obj).map(([k, v]) => [k, v === null ? '' : v]));
+  }
+
+  async function searchPatients(query) {
+    setPatientSearch(query);
+    if (!query || query.length < 2) { setPatientResults([]); setShowPatientDropdown(false); return; }
+    const res = await window.electronAPI.getPatients({ search: query });
+    if (res.success) {
+      setPatientResults(res.data.slice(0, 8));
+      setShowPatientDropdown(true);
+    }
+  }
+
+  function selectPatient(p) {
+    setSelectedPatient(p);
+    setProc(o => ({ ...o, patient_id: p.patient_id }));
+    setPatientSearch('');
+    setPatientResults([]);
+    setShowPatientDropdown(false);
+  }
+
+  function clearPatient() {
+    setSelectedPatient(null);
+    setProc(o => ({ ...o, patient_id: '' }));
   }
 
   function cleanObj(obj) {
@@ -167,8 +202,10 @@ export default function ProcedureForm({ procedureId, patientId }) {
       }
       if (res.success) {
         notify(isEdit ? 'Procedure updated' : 'Procedure recorded successfully');
-        if (!isEdit && res.data?.procedure_id) {
-          navigate('procedure-edit', { procedureId: res.data.procedure_id });
+        if (!isEdit) {
+          const pid = Number(proc.patient_id) || selectedPatient?.patient_id;
+          if (pid) navigate('patient-edit', { patientId: pid, defaultTab: 'procedures' });
+          else if (res.data?.procedure_id) navigate('procedure-edit', { procedureId: res.data.procedure_id });
         }
       } else {
         notify(res.error || 'Save failed', 'error');
@@ -202,7 +239,10 @@ export default function ProcedureForm({ procedureId, patientId }) {
           {proc.procedure_type && <p className="page-subtitle">{proc.procedure_type}</p>}
         </div>
         <div className="btn-group">
-          <button className="btn btn-secondary" onClick={() => navigate('patients')}>← Back</button>
+          <button className="btn btn-secondary" onClick={() => {
+            const pid = Number(proc.patient_id) || selectedPatient?.patient_id;
+            pid ? navigate('patient-edit', { patientId: pid }) : navigate('patients');
+          }}>← Back</button>
           {isEdit && (
             <button className="btn btn-secondary" onClick={() => navigate('followup', { procedureId })}>
               📅 Follow-ups
@@ -214,6 +254,32 @@ export default function ProcedureForm({ procedureId, patientId }) {
         </div>
       </div>
 
+      {selectedPatient && (
+        <div style={{ display:'flex', alignItems:'center', gap:12, background:'#1e3a5f', border:'1px solid #2563eb', borderRadius:8, padding:'10px 16px', marginBottom:16 }}>
+          <span style={{ fontSize:20 }}>👤</span>
+          <div style={{ flex:1 }}>
+            <span style={{ fontWeight:600, color:'#93c5fd' }}>
+              {selectedPatient.first_name} {selectedPatient.last_name}
+            </span>
+            <span style={{ color:'#64748b', margin:'0 8px' }}>|</span>
+            <span style={{ color:'#94a3b8', fontSize:13 }}>MRN: {selectedPatient.mrn}</span>
+            {selectedPatient.date_of_birth && (
+              <>
+                <span style={{ color:'#64748b', margin:'0 8px' }}>|</span>
+                <span style={{ color:'#94a3b8', fontSize:13 }}>
+                  DOB: {selectedPatient.date_of_birth}
+                </span>
+              </>
+            )}
+          </div>
+          {!patientId && (
+            <button className="btn btn-secondary" style={{ padding:'4px 10px', fontSize:12 }} onClick={clearPatient}>
+              Change Patient
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="tabs">
         {tabs.map(t => (
           <button key={t.id} className={`tab-btn ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
@@ -222,7 +288,10 @@ export default function ProcedureForm({ procedureId, patientId }) {
         ))}
       </div>
 
-      {tab === 'procedure' && <ProcedureInfoTab proc={proc} setProc={setProc} surgeons={surgeons} setF={setF(setProc)} />}
+      {tab === 'procedure' && <ProcedureInfoTab proc={proc} setProc={setProc} surgeons={surgeons} setF={setF(setProc)}
+        selectedPatient={selectedPatient} patientSearch={patientSearch} onPatientSearch={searchPatients}
+        patientResults={patientResults} showPatientDropdown={showPatientDropdown}
+        onSelectPatient={selectPatient} onCloseDropdown={() => setShowPatientDropdown(false)} />}
       {tab === 'preop' && <PreopTab proc={proc} setF={setF(setProc)} />}
       {tab === 'intraop' && <IntraopTab data={intraop} setF={setF(setIntraop)} toggle={(f) => toggle(setIntraop, f)} procType={procType} />}
       {tab === 'postop' && <PostopTab data={postop} setF={setF(setPostop)} toggle={(f) => toggle(setPostop, f)} />}
@@ -233,18 +302,39 @@ export default function ProcedureForm({ procedureId, patientId }) {
   );
 }
 
-function ProcedureInfoTab({ proc, setProc, surgeons, setF }) {
+function ProcedureInfoTab({ proc, setProc, surgeons, setF, selectedPatient, patientSearch, onPatientSearch, patientResults, showPatientDropdown, onSelectPatient, onCloseDropdown }) {
   return (
     <div className="card">
       <div className="card-body">
         <div className="form-grid form-grid-3">
           <div className="section-header">Procedure Identification</div>
 
-          {!proc.patient_id && (
-            <div className="form-group">
-              <label className="form-label required">Patient ID</label>
-              <input className="form-input" type="number" value={proc.patient_id}
-                onChange={e => setF('patient_id', e.target.value)} placeholder="Patient ID number" />
+          {!selectedPatient && (
+            <div className="form-group" style={{ position:'relative' }}>
+              <label className="form-label required">Patient</label>
+              <input className="form-input" type="text" value={patientSearch}
+                onChange={e => onPatientSearch(e.target.value)}
+                onBlur={() => setTimeout(onCloseDropdown, 200)}
+                placeholder="Search by name or MRN..." />
+              {showPatientDropdown && patientResults.length > 0 && (
+                <div style={{ position:'absolute', zIndex:100, top:'100%', left:0, right:0, background:'#1e2a3a', border:'1px solid #334155', borderRadius:6, boxShadow:'0 4px 16px rgba(0,0,0,0.4)', maxHeight:260, overflowY:'auto' }}>
+                  {patientResults.map(p => (
+                    <div key={p.patient_id}
+                      style={{ padding:'10px 14px', cursor:'pointer', borderBottom:'1px solid #1e293b' }}
+                      onMouseDown={() => onSelectPatient(p)}
+                      onMouseEnter={e => e.currentTarget.style.background='#263548'}
+                      onMouseLeave={e => e.currentTarget.style.background='transparent'}>
+                      <div style={{ fontWeight:600, color:'#e2e8f0' }}>{p.first_name} {p.last_name}</div>
+                      <div style={{ fontSize:12, color:'#64748b' }}>MRN: {p.mrn}{p.date_of_birth ? ` · DOB: ${p.date_of_birth}` : ''}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showPatientDropdown && patientResults.length === 0 && patientSearch.length >= 2 && (
+                <div style={{ position:'absolute', zIndex:100, top:'100%', left:0, right:0, background:'#1e2a3a', border:'1px solid #334155', borderRadius:6, padding:'12px 14px', color:'#64748b', fontSize:13 }}>
+                  No patients found. <a href="#" style={{ color:'#60a5fa' }} onMouseDown={e => { e.preventDefault(); }}>Create a new patient first.</a>
+                </div>
+              )}
             </div>
           )}
 

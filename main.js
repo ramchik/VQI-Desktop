@@ -2,11 +2,17 @@ const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
+// In a packaged Electron app, __dirname inside main.js points to the root of
+// the asar archive (or the app folder when unpackaged). All paths below use
+// __dirname so they work correctly in both dev and packaged modes.
+
 let mainWindow;
 let db;
 
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  // Only show icon if the file actually exists (avoid crash when missing)
+  const iconPath = path.join(__dirname, 'assets', 'icon.ico');
+  const windowOptions = {
     width: 1400,
     height: 900,
     minWidth: 1024,
@@ -14,12 +20,18 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      // Allow loading local files from the asar archive
+      webSecurity: true
     },
-    icon: path.join(__dirname, 'assets', 'icon.png'),
     title: 'VQI Desktop Registry — Vascular Surgery',
-    show: false
-  });
+    show: false,
+    backgroundColor: '#1e2a3a'
+  };
+
+  if (fs.existsSync(iconPath)) windowOptions.icon = iconPath;
+
+  mainWindow = new BrowserWindow(windowOptions);
 
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
 

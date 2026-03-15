@@ -1,0 +1,10 @@
+node_modules/
+src/bundle.js
+src/bundle.js.map
+release/
+dist/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+Thumbs.db

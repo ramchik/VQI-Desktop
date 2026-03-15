@@ -226,12 +226,12 @@ function createProcedure(data) {
       hospital, urgency, anesthesia_type, indication, symptom_status, admission_type,
       preop_imaging, stenosis_percent, aneurysm_diameter, aneurysm_growth_rate, abi_preop,
       toe_pressure, rutherford_class, wound_classification, infection_present, tissue_loss,
-      baseline_creatinine, hemoglobin, platelet_count, notes, created_by)
+      baseline_creatinine, hemoglobin, platelet_count, notes)
     VALUES (@patient_id, @procedure_type, @procedure_date, @surgeon_id, @assistant,
       @hospital, @urgency, @anesthesia_type, @indication, @symptom_status, @admission_type,
       @preop_imaging, @stenosis_percent, @aneurysm_diameter, @aneurysm_growth_rate, @abi_preop,
       @toe_pressure, @rutherford_class, @wound_classification, @infection_present, @tissue_loss,
-      @baseline_creatinine, @hemoglobin, @platelet_count, @notes, @created_by)
+      @baseline_creatinine, @hemoglobin, @platelet_count, @notes)
   `);
   const result = stmt.run(procData);
   const procedureId = result.lastInsertRowid;

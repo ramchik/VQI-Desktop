@@ -1,0 +1,106 @@
+name: Build Windows Installer
+
+on:
+  push:
+    branches: [ main, master, "claude/**" ]
+    tags: [ "v*" ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:   # allows manual trigger from GitHub UI
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # Python is needed by node-gyp to compile better-sqlite3 native module
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Install all deps; postinstall runs electron-rebuild automatically
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_msvs_version: "2022"
+
+      # Rebuild native module (better-sqlite3) against the packaged Electron version
+      - name: Rebuild native modules for Electron
+        run: npx electron-rebuild -f -w better-sqlite3
+        env:
+          npm_config_msvs_version: "2022"
+
+      # Compile React UI into src/bundle.js
+      - name: Build renderer (webpack)
+        run: npm run webpack:build
+
+      # Package into Windows installer (.exe) and portable (.exe)
+      - name: Build Windows packages
+        run: npx electron-builder --win --x64 --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Upload both the NSIS installer and the portable exe as build artifacts
+      - name: Upload NSIS Installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: VQI-Desktop-Setup-Windows
+          path: release/VQI-Desktop-Setup-*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload Portable EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: VQI-Desktop-Portable-Windows
+          path: release/VQI-Desktop-Portable-*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+  # Optional: create a GitHub Release when a version tag is pushed (e.g. v1.0.0)
+  release:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.exe
+          body: |
+            ## VQI Desktop Registry ${{ github.ref_name }}
+
+            ### Download
+            - **VQI-Desktop-Setup-*.exe** — Windows installer (recommended)
+            - **VQI-Desktop-Portable-*.exe** — Portable version, no installation needed
+
+            ### Default Login
+            - Username: `admin`
+            - Password: `admin123`
+
+            **Change the default password immediately after first login.**
+
+            ### System Requirements
+            - Windows 10 / 11 (64-bit)
+            - No internet connection required
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

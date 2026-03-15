@@ -27,9 +27,9 @@ const EMPTY_MEDICATIONS = {
   insulin: 0, oral_diabetic_medications: 0, antibiotic_prophylaxis: 0
 };
 
-export default function PatientForm({ patientId }) {
+export default function PatientForm({ patientId, defaultTab }) {
   const { navigate, notify } = useApp();
-  const [tab, setTab] = useState('demographics');
+  const [tab, setTab] = useState(defaultTab || 'demographics');
   const [patient, setPatient] = useState(EMPTY_PATIENT);
   const [comorbidities, setComorbidities] = useState(EMPTY_COMORBIDITIES);
   const [medications, setMedications] = useState(EMPTY_MEDICATIONS);
