@@ -3,13 +3,20 @@
   "version": "1.0.0",
   "description": "Vascular Surgery Patient Registry - VQI Style Desktop Application",
   "main": "main.js",
+  "author": "VQI Desktop Registry",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "concurrently \"npm run webpack:watch\" \"wait-on dist/bundle.js && electron .\"",
-    "webpack:watch": "webpack --watch --mode development",
+    "dev": "concurrently \"npm run webpack:watch\" \"wait-on src/bundle.js && electron .\"",
+    "webpack:watch": "webpack --watch",
     "webpack:build": "webpack --mode production",
     "build": "npm run webpack:build",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
+    "dist": "npm run build && electron-builder",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:win:portable": "npm run build && electron-builder --win portable --x64",
+    "dist:win:installer": "npm run build && electron-builder --win nsis --x64"
   },
   "dependencies": {
     "better-sqlite3": "^9.4.3"
@@ -22,6 +29,7 @@
     "concurrently": "^8.2.2",
     "css-loader": "^6.10.0",
     "electron": "^28.2.0",
+    "electron-builder": "^24.13.3",
     "electron-rebuild": "^3.2.9",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -34,9 +42,60 @@
   "build": {
     "appId": "com.vascular.registry",
     "productName": "VQI Desktop Registry",
-    "files": ["dist/**/*", "main.js", "preload.js", "src/index.html"],
+    "copyright": "Copyright 2024 VQI Desktop Registry",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/index.html",
+      "src/bundle.js",
+      "src/database/schema.js",
+      "src/database/db.js",
+      "node_modules/**/*",
+      "!node_modules/.cache/**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,readme.md,readme,LICENCE,LICENSE}",
+      "!**/node_modules/*/{test,__tests__,tests,spec,specs,example,examples,fixtures,docs}",
+      "!**/node_modules/.bin",
+      "!**/*.{ts,tsx,map}",
+      "!**/node_modules/electron/**/*",
+      "!**/node_modules/electron-rebuild/**/*",
+      "!**/node_modules/webpack*/**/*",
+      "!**/node_modules/@babel/**/*",
+      "!**/node_modules/babel-loader/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*"
+    ],
+    "npmRebuild": true,
     "win": {
-      "target": "nsis"
-    }
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "VQI Registry",
+      "installerLanguages": ["en_US"],
+      "language": "1033",
+      "artifactName": "VQI-Desktop-Setup-${version}.exe"
+    },
+    "portable": {
+      "artifactName": "VQI-Desktop-Portable-${version}.exe"
+    },
+    "extraResources": [],
+    "publish": null
   }
 }
