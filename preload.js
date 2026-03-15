@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getRedFlags: () => ipcRenderer.invoke('alerts:getRedFlags'),
 
   // Research / Cohort
+  getPatientRawData: (ids) => ipcRenderer.invoke('research:getPatientRawData', ids),
   getCohort: (filters) => ipcRenderer.invoke('research:getCohort', filters),
   getTable1Stats: (patientIds) => ipcRenderer.invoke('research:getTable1', patientIds),
   getTimeToEvent: (patientIds) => ipcRenderer.invoke('research:getTimeToEvent', patientIds),

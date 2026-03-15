@@ -648,6 +648,49 @@ function backupDatabase(destPath) {
   });
 }
 
+// ─── TABLE 1 RAW DATA (for frontend statistical tests) ───────────────────────
+
+function getPatientRawData(patientIds) {
+  if (!patientIds || patientIds.length === 0) return [];
+  const placeholders = patientIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT
+      p.patient_id, p.date_of_birth, p.sex, p.race, p.ethnicity,
+      p.bmi, p.height_cm, p.weight_kg,
+      c.hypertension, c.diabetes, c.diabetes_type, c.hba1c, c.hyperlipidemia,
+      c.coronary_artery_disease, c.prior_mi, c.prior_cabg, c.prior_pci,
+      c.heart_failure, c.nyha_class, c.copd, c.home_oxygen,
+      c.ckd_stage, c.dialysis, c.atrial_fibrillation,
+      c.prior_stroke, c.prior_tia, c.peripheral_artery_disease,
+      c.claudication_history, c.prior_amputation, c.carotid_disease,
+      c.family_history_aneurysm, c.frailty_score,
+      c.smoking_status, c.pack_years, c.functional_status, c.ambulatory_status,
+      m.aspirin, m.clopidogrel, m.ticagrelor, m.warfarin,
+      m.apixaban, m.rivaroxaban, m.statin, m.beta_blocker,
+      m.ace_inhibitor, m.arb, m.insulin, m.oral_diabetic_medications,
+      -- Pre-op labs from most recent procedure
+      (SELECT pr2.hemoglobin FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS hemoglobin,
+      (SELECT pr2.baseline_creatinine FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS creatinine,
+      (SELECT pr2.platelet_count FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS platelet_count,
+      (SELECT pr2.procedure_type FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS last_procedure_type,
+      (SELECT COUNT(*) FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id) AS procedure_count
+    FROM patients p
+    LEFT JOIN comorbidities c ON c.patient_id = p.patient_id
+    LEFT JOIN medications m ON m.patient_id = p.patient_id
+    WHERE p.patient_id IN (${placeholders})
+    ORDER BY p.last_name, p.first_name
+  `).all(...patientIds);
+}
+
 // ─── RED-FLAG ALERTS ─────────────────────────────────────────────────────────
 
 function getRedFlags() {
@@ -939,6 +982,7 @@ module.exports = {
   getDashboardStats, getReportData,
   exportPatientData, exportProcedureData, backupDatabase,
   upsertIntraoperative, upsertPostoperative, upsertModule,
+  getPatientRawData,
   getRedFlags, getCohort, getTable1Stats, getTimeToEvent,
   getDevices, createDevice, updateDevice, deleteDevice,
   getPhotos, createPhoto, deletePhoto,

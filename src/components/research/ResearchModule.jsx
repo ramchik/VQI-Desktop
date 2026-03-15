@@ -1,5 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../App';
+import {
+  calcAge, summarize, computeP,
+  formatP, pColor, pAsterisks
+} from '../../utils/stats';
 
 const PROCEDURE_TYPES = [
   'Carotid Endarterectomy','Carotid Artery Stenting','TCAR (Transcarotid Artery Revascularization)',
@@ -11,22 +15,137 @@ const PROCEDURE_TYPES = [
   'Deep Venous Reconstruction','Fasciotomy','Other Vascular Procedure'
 ];
 
+// ─── Variable Definitions ─────────────────────────────────────────────────────
+// Each entry describes one row in Table 1.
+// type: 'continuous' | 'binary' | 'categorical'
+// extract: fn(rawPatientRow) → value (null if missing)
+
+const TABLE1_VARS = [
+  // ── Demographics ──────────────────────────────────────────────────────────
+  { section: 'Demographics' },
+  { key: 'age',        label: 'Age (years)',      type: 'continuous',
+    extract: p => calcAge(p.date_of_birth) },
+  { key: 'sex_female', label: 'Female sex',       type: 'binary',
+    extract: p => p.sex == null ? null : p.sex === 'Female' ? 1 : 0 },
+  { key: 'bmi',        label: 'BMI (kg/m²)',      type: 'continuous',
+    extract: p => p.bmi },
+  { key: 'race',       label: 'Race',             type: 'categorical',
+    extract: p => p.race || null },
+
+  // ── Comorbidities ─────────────────────────────────────────────────────────
+  { section: 'Comorbidities' },
+  { key: 'hypertension',         label: 'Hypertension',              type: 'binary',
+    extract: p => p.hypertension },
+  { key: 'diabetes',             label: 'Diabetes mellitus',         type: 'binary',
+    extract: p => p.diabetes },
+  { key: 'dm_insulin',           label: '  Insulin-dependent DM',    type: 'binary', indent: true,
+    extract: p => p.diabetes ? (p.insulin ? 1 : 0) : null },
+  { key: 'dm_oral',              label: '  Oral agents DM',          type: 'binary', indent: true,
+    extract: p => p.diabetes ? (p.oral_diabetic_medications ? 1 : 0) : null },
+  { key: 'hba1c',                label: '  HbA1c (%)',               type: 'continuous', indent: true,
+    extract: p => p.hba1c },
+  { key: 'smoking_status',       label: 'Smoking status',            type: 'categorical',
+    extract: p => p.smoking_status || null },
+  { key: 'smoking_current',      label: '  Current smoker',          type: 'binary', indent: true,
+    extract: p => p.smoking_status ? (p.smoking_status === 'Current' ? 1 : 0) : null },
+  { key: 'pack_years',           label: '  Pack-years',              type: 'continuous', indent: true,
+    extract: p => p.pack_years },
+  { key: 'hyperlipidemia',       label: 'Hyperlipidemia',            type: 'binary',
+    extract: p => p.hyperlipidemia },
+  { key: 'cad',                  label: 'Coronary artery disease',   type: 'binary',
+    extract: p => p.coronary_artery_disease },
+  { key: 'prior_mi',             label: '  Prior MI',                type: 'binary', indent: true,
+    extract: p => p.prior_mi },
+  { key: 'prior_cabg',           label: '  Prior CABG',              type: 'binary', indent: true,
+    extract: p => p.prior_cabg },
+  { key: 'prior_pci',            label: '  Prior PCI',               type: 'binary', indent: true,
+    extract: p => p.prior_pci },
+  { key: 'heart_failure',        label: 'Heart failure',             type: 'binary',
+    extract: p => p.heart_failure },
+  { key: 'copd',                 label: 'COPD',                      type: 'binary',
+    extract: p => p.copd },
+  { key: 'afib',                 label: 'Atrial fibrillation',       type: 'binary',
+    extract: p => p.atrial_fibrillation },
+  { key: 'ckd_stage',            label: 'CKD stage',                 type: 'categorical',
+    extract: p => p.ckd_stage != null ? `Stage ${p.ckd_stage}` : null },
+  { key: 'dialysis',             label: 'Dialysis',                  type: 'binary',
+    extract: p => p.dialysis },
+  { key: 'prior_stroke',         label: 'Prior stroke / TIA',        type: 'binary',
+    extract: p => (p.prior_stroke || p.prior_tia) ? 1 : (p.prior_stroke == null && p.prior_tia == null ? null : 0) },
+  { key: 'pad',                  label: 'Peripheral artery disease',  type: 'binary',
+    extract: p => p.peripheral_artery_disease },
+  { key: 'prior_amputation',     label: 'Prior amputation',          type: 'binary',
+    extract: p => p.prior_amputation },
+  { key: 'functional_status',    label: 'Functional status',         type: 'categorical',
+    extract: p => p.functional_status || null },
+
+  // ── Medications ───────────────────────────────────────────────────────────
+  { section: 'Pre-operative Medications' },
+  { key: 'aspirin',              label: 'Aspirin',                   type: 'binary',
+    extract: p => p.aspirin },
+  { key: 'clopidogrel',         label: 'Clopidogrel',               type: 'binary',
+    extract: p => p.clopidogrel },
+  { key: 'ticagrelor',          label: 'Ticagrelor',                type: 'binary',
+    extract: p => p.ticagrelor },
+  { key: 'any_antiplatelet',    label: 'Any antiplatelet',          type: 'binary',
+    extract: p => (p.aspirin || p.clopidogrel || p.ticagrelor) ? 1 :
+      (p.aspirin == null ? null : 0) },
+  { key: 'statin',              label: 'Statin',                    type: 'binary',
+    extract: p => p.statin },
+  { key: 'beta_blocker',        label: 'Beta-blocker',              type: 'binary',
+    extract: p => p.beta_blocker },
+  { key: 'ace_arb',             label: 'ACE inhibitor / ARB',       type: 'binary',
+    extract: p => (p.ace_inhibitor || p.arb) ? 1 : (p.ace_inhibitor == null ? null : 0) },
+  { key: 'anticoag',            label: 'Anticoagulation',           type: 'binary',
+    extract: p => (p.warfarin || p.apixaban || p.rivaroxaban) ? 1 :
+      (p.warfarin == null ? null : 0) },
+  { key: 'warfarin',            label: '  Warfarin / VKA',          type: 'binary', indent: true,
+    extract: p => p.warfarin },
+  { key: 'doac',                label: '  DOAC (apixaban/rivaroxaban)', type: 'binary', indent: true,
+    extract: p => (p.apixaban || p.rivaroxaban) ? 1 : (p.apixaban == null ? null : 0) },
+
+  // ── Pre-operative Labs ────────────────────────────────────────────────────
+  { section: 'Pre-operative Laboratory Values' },
+  { key: 'hemoglobin',          label: 'Hemoglobin (g/dL)',         type: 'continuous',
+    extract: p => p.hemoglobin },
+  { key: 'creatinine',          label: 'Creatinine (mg/dL)',        type: 'continuous',
+    extract: p => p.creatinine },
+  { key: 'platelet_count',      label: 'Platelet count (×10³/µL)', type: 'continuous',
+    extract: p => p.platelet_count },
+];
+
 const EMPTY_FILTERS = {
   sex: '', minAge: '', maxAge: '', diabetes: '', hypertension: '', copd: '',
   heart_failure: '', dialysis: '', prior_stroke: '', smoking: '',
   procedure_type: '', procedure_date_from: '', procedure_date_to: '', surgeon_id: ''
 };
 
+// ─── Main Component ───────────────────────────────────────────────────────────
+
 export default function ResearchModule() {
   const { navigate } = useApp();
-  const [tab, setTab] = useState('cohort');
+  const [activeTab, setActiveTab] = useState('cohort');
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [surgeons, setSurgeons] = useState([]);
   const [cohort, setCohort] = useState(null);
-  const [table1, setTable1] = useState(null);
-  const [timeToEvent, setTimeToEvent] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [selectedRows, setSelectedRows] = useState(new Set());
+  const [loading, setLoading] = useState(false);
+
+  // Table 1 state
+  const [table1Data, setTable1Data] = useState(null);     // { groupA, groupB? }
+  const [t1Config, setT1Config] = useState({
+    twoGroup: false,
+    splitBy: 'procedure_type',   // 'procedure_type' | 'sex' | 'custom'
+    groupALabel: 'Group A',
+    groupBLabel: 'Group B',
+    groupAProcType: '',
+    groupBProcType: '',
+    groupAIds: new Set(),         // used when splitBy='custom'
+    groupBIds: new Set(),
+  });
+
+  // Time-to-event state
+  const [timeToEvent, setTimeToEvent] = useState(null);
 
   useEffect(() => {
     window.electronAPI.getSurgeons().then(r => { if (r.success) setSurgeons(r.data); });
@@ -34,9 +153,10 @@ export default function ResearchModule() {
 
   function setF(field, val) { setFilters(f => ({ ...f, [field]: val })); }
 
-  async function runQuery() {
+  async function runCohortQuery() {
     setLoading(true);
-    setCohort(null); setTable1(null); setTimeToEvent(null); setSelectedRows(new Set());
+    setCohort(null); setTable1Data(null); setTimeToEvent(null);
+    setSelectedRows(new Set()); setT1Config(c => ({ ...c, groupAIds: new Set(), groupBIds: new Set() }));
     try {
       const cleanFilters = Object.fromEntries(
         Object.entries(filters).filter(([, v]) => v !== '' && v !== null)
@@ -50,12 +170,45 @@ export default function ResearchModule() {
   }
 
   async function generateTable1() {
-    const ids = [...selectedRows];
-    if (!ids.length) return;
+    if (!cohort) return;
     setLoading(true);
     try {
-      const res = await window.electronAPI.getTable1Stats(ids);
-      if (res.success) { setTable1(res.data); setTab('table1'); }
+      let groupAIds, groupBIds;
+
+      if (t1Config.twoGroup) {
+        if (t1Config.splitBy === 'procedure_type') {
+          groupAIds = cohort.filter(p => p.last_procedure_type === t1Config.groupAProcType)
+            .map(p => p.patient_id);
+          groupBIds = cohort.filter(p => p.last_procedure_type === t1Config.groupBProcType)
+            .map(p => p.patient_id);
+        } else if (t1Config.splitBy === 'sex') {
+          groupAIds = cohort.filter(p => p.sex === 'Male').map(p => p.patient_id);
+          groupBIds = cohort.filter(p => p.sex === 'Female').map(p => p.patient_id);
+          setT1Config(c => ({ ...c, groupALabel: 'Male', groupBLabel: 'Female' }));
+        } else {
+          groupAIds = [...t1Config.groupAIds];
+          groupBIds = [...t1Config.groupBIds];
+        }
+        if (!groupAIds.length || !groupBIds.length) {
+          alert('Both groups must have at least 1 patient. Check your split settings.');
+          setLoading(false); return;
+        }
+      } else {
+        groupAIds = [...selectedRows];
+      }
+
+      const [resA, resB] = await Promise.all([
+        window.electronAPI.getPatientRawData(groupAIds),
+        t1Config.twoGroup ? window.electronAPI.getPatientRawData(groupBIds) : Promise.resolve(null)
+      ]);
+
+      setTable1Data({
+        rawA: resA.success ? resA.data : [],
+        rawB: resB && resB.success ? resB.data : null,
+        groupALabel: t1Config.groupALabel,
+        groupBLabel: t1Config.groupBLabel,
+      });
+      setActiveTab('table1');
     } finally { setLoading(false); }
   }
 
@@ -65,7 +218,7 @@ export default function ResearchModule() {
     setLoading(true);
     try {
       const res = await window.electronAPI.getTimeToEvent(ids);
-      if (res.success) { setTimeToEvent(res.data); setTab('tte'); }
+      if (res.success) { setTimeToEvent(res.data); setActiveTab('tte'); }
     } finally { setLoading(false); }
   }
 
@@ -74,114 +227,83 @@ export default function ResearchModule() {
   }
   function toggleAll() {
     if (!cohort) return;
-    if (selectedRows.size === cohort.length) setSelectedRows(new Set());
-    else setSelectedRows(new Set(cohort.map(p => p.patient_id)));
+    setSelectedRows(s => s.size === cohort.length ? new Set() : new Set(cohort.map(p => p.patient_id)));
   }
 
-  function calcAge(dob) {
-    if (!dob) return '—';
-    const today = new Date(), b = new Date(dob);
-    return today.getFullYear() - b.getFullYear() -
-      (today < new Date(today.getFullYear(), b.getMonth(), b.getDate()) ? 1 : 0);
+  function calcAgeDisplay(dob) {
+    const a = calcAge(dob); return a ?? '—';
   }
 
-  function calcMFI5(p) {
+  function mfi5(p) {
     return (p.diabetes ? 1 : 0) + (p.copd ? 1 : 0) + (p.heart_failure ? 1 : 0) +
       (p.hypertension ? 1 : 0) +
       (p.functional_status && p.functional_status !== 'Independent' ? 1 : 0);
   }
 
-  function exportCohortCSV() {
-    if (!cohort) return;
-    const rows = cohort.filter(p => selectedRows.has(p.patient_id));
-    const headers = ['patient_id','mrn','last_name','first_name','date_of_birth','age','sex','race',
-      'hypertension','diabetes','copd','heart_failure','prior_stroke','dialysis',
-      'smoking_status','peripheral_artery_disease','functional_status','mfi5',
-      'procedure_count','last_procedure_date'];
-    const csv = [headers.join(','),
-      ...rows.map(p => [
-        p.patient_id, p.mrn, p.last_name, p.first_name, p.date_of_birth, calcAge(p.date_of_birth),
-        p.sex, p.race || '',
-        p.hypertension || 0, p.diabetes || 0, p.copd || 0, p.heart_failure || 0,
-        p.prior_stroke || 0, p.dialysis || 0, p.smoking_status || '',
-        p.peripheral_artery_disease || 0, p.functional_status || '', calcMFI5(p),
-        p.procedure_count || 0, p.last_procedure_date || ''
-      ].join(','))
-    ].join('\n');
-    window.electronAPI.saveFile(csv, 'cohort_export.csv', [{ name: 'CSV Files', extensions: ['csv'] }]);
-  }
-
-  function exportTTEcsv() {
-    if (!timeToEvent) return;
-    const headers = ['patient_id','mrn','patient_name','procedure_id','procedure_type',
-      'procedure_date','days_to_event','event_reintervention','event_death',
-      'reintervention_date','death_date','last_followup_date'];
-    const csv = [headers.join(','),
-      ...timeToEvent.map(r => [
-        r.patient_id, r.mrn, `"${r.patient_name}"`, r.procedure_id, `"${r.procedure_type}"`,
-        r.procedure_date, r.days_to_event ?? '',
-        r.event_reintervention || 0, r.event_death || 0,
-        r.reintervention_date || '', r.death_date || '', r.last_followup_date || ''
-      ].join(','))
-    ].join('\n');
-    window.electronAPI.saveFile(csv, 'time_to_event.csv', [{ name: 'CSV Files', extensions: ['csv'] }]);
-  }
+  const tabs = [
+    { id: 'cohort', label: '🔍 Cohort Builder' },
+    ...(table1Data ? [{ id: 'table1', label: '📋 Table 1' }] : []),
+    ...(timeToEvent ? [{ id: 'tte', label: '📈 Time-to-Event' }] : []),
+  ];
 
   return (
     <div className="page-wide" style={{ padding: 24 }}>
       <div className="page-header">
         <div>
           <h1 className="page-title">🔬 Research Workspace</h1>
-          <p className="page-subtitle">Cohort builder · Table 1 · Time-to-event analysis</p>
+          <p className="page-subtitle">Cohort builder · Table 1 with p-values · Time-to-event · Missing data audit</p>
         </div>
         {cohort && (
           <div className="btn-group">
             <span style={{ color: '#94a3b8', alignSelf: 'center', fontSize: 13 }}>
-              {selectedRows.size} / {cohort.length} selected
+              {selectedRows.size}/{cohort.length} selected
             </span>
-            <button className="btn btn-secondary" onClick={generateTable1} disabled={!selectedRows.size || loading}>
-              📋 Table 1
-            </button>
-            <button className="btn btn-secondary" onClick={generateTTE} disabled={!selectedRows.size || loading}>
-              📈 Time-to-Event
-            </button>
-            <button className="btn btn-secondary" onClick={exportCohortCSV} disabled={!selectedRows.size}>
-              ⬇ Export CSV
-            </button>
+            <button className="btn btn-secondary" onClick={generateTable1}
+              disabled={!selectedRows.size || loading}>📋 Table 1</button>
+            <button className="btn btn-secondary" onClick={generateTTE}
+              disabled={!selectedRows.size || loading}>📈 Time-to-Event</button>
           </div>
         )}
       </div>
 
       <div className="tabs">
-        {[
-          { id: 'cohort', label: '🔍 Cohort Builder' },
-          ...(table1 ? [{ id: 'table1', label: '📋 Table 1' }] : []),
-          ...(timeToEvent ? [{ id: 'tte', label: '📈 Time-to-Event' }] : []),
-        ].map(t => (
-          <button key={t.id} className={`tab-btn ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
+        {tabs.map(t => (
+          <button key={t.id} className={`tab-btn ${activeTab === t.id ? 'active' : ''}`}
+            onClick={() => setActiveTab(t.id)}>{t.label}</button>
         ))}
       </div>
 
-      {tab === 'cohort' && (
+      {activeTab === 'cohort' && (
         <>
           <CohortFilters filters={filters} setF={setF} surgeons={surgeons}
-            onReset={() => setFilters(EMPTY_FILTERS)} onRun={runQuery} loading={loading} />
+            onReset={() => setFilters(EMPTY_FILTERS)} onRun={runCohortQuery} loading={loading} />
+
           {cohort !== null && (
-            <CohortResults cohort={cohort} selectedRows={selectedRows}
-              toggleRow={toggleRow} toggleAll={toggleAll}
-              calcAge={calcAge} calcMFI5={calcMFI5}
-              onNavigatePatient={id => navigate('patient-edit', { patientId: id })} />
+            <>
+              <Table1Config config={t1Config} setConfig={setT1Config}
+                cohort={cohort} procedureTypes={PROCEDURE_TYPES} />
+              <CohortResults cohort={cohort} selectedRows={selectedRows}
+                toggleRow={toggleRow} toggleAll={toggleAll}
+                calcAge={calcAgeDisplay} mfi5={mfi5}
+                config={t1Config} setConfig={setT1Config}
+                onNavigate={id => navigate('patient-edit', { patientId: id })} />
+            </>
           )}
         </>
       )}
 
-      {tab === 'table1' && table1 && <Table1View stats={table1} />}
-      {tab === 'tte' && timeToEvent && <TimeToEventView data={timeToEvent} onExport={exportTTEcsv} />}
+      {activeTab === 'table1' && table1Data && (
+        <Table1View data={table1Data} />
+      )}
+
+      {activeTab === 'tte' && timeToEvent && (
+        <TimeToEventView data={timeToEvent} />
+      )}
     </div>
   );
 }
+
+// ─── Cohort Filter Panel ──────────────────────────────────────────────────────
 
 function CohortFilters({ filters, setF, surgeons, onReset, onRun, loading }) {
   return (
@@ -196,8 +318,7 @@ function CohortFilters({ filters, setF, surgeons, onReset, onRun, loading }) {
           <div className="form-group">
             <label className="form-label">Sex</label>
             <select className="form-select" value={filters.sex} onChange={e => setF('sex', e.target.value)}>
-              <option value="">Any</option>
-              <option>Male</option><option>Female</option><option>Other</option>
+              <option value="">Any</option><option>Male</option><option>Female</option>
             </select>
           </div>
           <div className="form-group">
@@ -212,23 +333,20 @@ function CohortFilters({ filters, setF, surgeons, onReset, onRun, loading }) {
           </div>
 
           <div className="section-header">Comorbidities</div>
-          {[
-            ['diabetes', 'Diabetes'], ['hypertension', 'Hypertension'], ['copd', 'COPD'],
-            ['heart_failure', 'Heart Failure'], ['dialysis', 'Dialysis'], ['prior_stroke', 'Prior Stroke']
+          {[['diabetes','Diabetes'],['hypertension','Hypertension'],['copd','COPD'],
+            ['heart_failure','Heart Failure'],['dialysis','Dialysis'],['prior_stroke','Prior Stroke']
           ].map(([field, label]) => (
             <div className="form-group" key={field}>
               <label className="form-label">{label}</label>
               <select className="form-select" value={filters[field]} onChange={e => setF(field, e.target.value)}>
-                <option value="">Any</option>
-                <option value="1">Yes</option>
+                <option value="">Any</option><option value="1">Yes</option>
               </select>
             </div>
           ))}
           <div className="form-group">
             <label className="form-label">Smoking Status</label>
             <select className="form-select" value={filters.smoking} onChange={e => setF('smoking', e.target.value)}>
-              <option value="">Any</option>
-              <option>Never</option><option>Former</option><option>Current</option>
+              <option value="">Any</option><option>Never</option><option>Former</option><option>Current</option>
             </select>
           </div>
 
@@ -256,11 +374,12 @@ function CohortFilters({ filters, setF, surgeons, onReset, onRun, loading }) {
             <select className="form-select" value={filters.surgeon_id}
               onChange={e => setF('surgeon_id', e.target.value)}>
               <option value="">Any</option>
-              {surgeons.map(s => <option key={s.surgeon_id} value={s.surgeon_id}>Dr. {s.first_name} {s.last_name}</option>)}
+              {surgeons.map(s => <option key={s.surgeon_id} value={s.surgeon_id}>
+                Dr. {s.first_name} {s.last_name}</option>)}
             </select>
           </div>
         </div>
-        <div style={{ marginTop: 16, display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
           <button className="btn btn-primary" onClick={onRun} disabled={loading}>
             {loading ? <><span className="spinner-sm"></span> Running...</> : '🔍 Run Query'}
           </button>
@@ -270,46 +389,205 @@ function CohortFilters({ filters, setF, surgeons, onReset, onRun, loading }) {
   );
 }
 
-function CohortResults({ cohort, selectedRows, toggleRow, toggleAll, calcAge, calcMFI5, onNavigatePatient }) {
-  if (cohort.length === 0) {
+// ─── Two-Group Configuration ──────────────────────────────────────────────────
+
+function Table1Config({ config, setConfig, cohort, procedureTypes }) {
+  function setC(field, val) { setConfig(c => ({ ...c, [field]: val })); }
+
+  const uniqueProcTypes = [...new Set(cohort.map(p => p.last_procedure_type).filter(Boolean))];
+
+  return (
+    <div className="card" style={{ marginBottom: 16, borderLeft: '3px solid #2563eb' }}>
+      <div className="card-header">
+        <div className="card-title">📊 Table 1 Configuration</div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13 }}>
+          <input type="checkbox" checked={config.twoGroup}
+            onChange={e => setC('twoGroup', e.target.checked)} />
+          <span style={{ color: '#93c5fd', fontWeight: 600 }}>Enable Two-Group Comparison (p-values)</span>
+        </label>
+      </div>
+      {config.twoGroup && (
+        <div className="card-body">
+          <div className="form-grid form-grid-3">
+            <div className="form-group">
+              <label className="form-label">Split By</label>
+              <select className="form-select" value={config.splitBy}
+                onChange={e => setC('splitBy', e.target.value)}>
+                <option value="procedure_type">Procedure Type</option>
+                <option value="sex">Sex (Male vs Female)</option>
+                <option value="custom">Custom (manual row assignment)</option>
+              </select>
+            </div>
+
+            {config.splitBy === 'procedure_type' && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Group A — Procedure Type</label>
+                  <select className="form-select" value={config.groupAProcType}
+                    onChange={e => { setC('groupAProcType', e.target.value); setC('groupALabel', e.target.value || 'Group A'); }}>
+                    <option value="">Select...</option>
+                    {uniqueProcTypes.map(t => <option key={t}>{t}</option>)}
+                  </select>
+                  {config.groupAProcType && (
+                    <span style={{ fontSize: 12, color: '#64748b' }}>
+                      n = {cohort.filter(p => p.last_procedure_type === config.groupAProcType).length}
+                    </span>
+                  )}
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Group B — Procedure Type</label>
+                  <select className="form-select" value={config.groupBProcType}
+                    onChange={e => { setC('groupBProcType', e.target.value); setC('groupBLabel', e.target.value || 'Group B'); }}>
+                    <option value="">Select...</option>
+                    {uniqueProcTypes.filter(t => t !== config.groupAProcType).map(t => <option key={t}>{t}</option>)}
+                  </select>
+                  {config.groupBProcType && (
+                    <span style={{ fontSize: 12, color: '#64748b' }}>
+                      n = {cohort.filter(p => p.last_procedure_type === config.groupBProcType).length}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+
+            {config.splitBy === 'sex' && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Group A</label>
+                  <div style={{ color: '#e2e8f0' }}>Male (n = {cohort.filter(p => p.sex === 'Male').length})</div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Group B</label>
+                  <div style={{ color: '#e2e8f0' }}>Female (n = {cohort.filter(p => p.sex === 'Female').length})</div>
+                </div>
+              </>
+            )}
+
+            {config.splitBy === 'custom' && (
+              <div className="form-group full-width">
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                  Use the "A / B" column in the cohort table below to assign each patient to a group.
+                  Unassigned patients are excluded from comparison.
+                </div>
+                <div style={{ marginTop: 6, color: '#64748b', fontSize: 12 }}>
+                  Group A: {config.groupAIds.size} patients · Group B: {config.groupBIds.size} patients
+                </div>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label className="form-label">Group A Label</label>
+              <input className="form-input" value={config.groupALabel}
+                onChange={e => setC('groupALabel', e.target.value)} placeholder="Group A" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Group B Label</label>
+              <input className="form-input" value={config.groupBLabel}
+                onChange={e => setC('groupBLabel', e.target.value)} placeholder="Group B" />
+            </div>
+          </div>
+          <div style={{ marginTop: 8, padding: '8px 12px', background: '#0f172a', borderRadius: 6, fontSize: 12, color: '#64748b' }}>
+            <strong style={{ color: '#60a5fa' }}>Statistics:</strong> Continuous variables → Welch's t-test (two-tailed) ·
+            Binary variables → χ² test or Fisher's exact (expected &lt;5) ·
+            Categorical variables → χ² test · Significance: * p&lt;0.05, ** p&lt;0.01, *** p&lt;0.001
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Cohort Results Table ─────────────────────────────────────────────────────
+
+function CohortResults({ cohort, selectedRows, toggleRow, toggleAll, calcAge, mfi5, config, setConfig, onNavigate }) {
+  if (!cohort.length) {
     return (
       <div className="card">
         <div className="empty-state" style={{ padding: 40 }}>
           <div className="empty-state-icon">🔍</div>
-          <div className="empty-state-title">No patients match these criteria</div>
+          <div className="empty-state-title">No patients match</div>
           <div className="empty-state-desc">Try loosening the filter criteria above</div>
         </div>
       </div>
     );
   }
 
+  function toggleCustomGroup(id, group) {
+    setConfig(c => {
+      const aIds = new Set(c.groupAIds), bIds = new Set(c.groupBIds);
+      if (group === 'A') { aIds.has(id) ? aIds.delete(id) : aIds.add(id); bIds.delete(id); }
+      else { bIds.has(id) ? bIds.delete(id) : bIds.add(id); aIds.delete(id); }
+      return { ...c, groupAIds: aIds, groupBIds: bIds };
+    });
+  }
+
+  function exportCohortCSV() {
+    const rows = cohort.filter(p => selectedRows.has(p.patient_id));
+    const h = ['patient_id','mrn','last_name','first_name','dob','age','sex','race',
+      'hypertension','diabetes','cad','copd','heart_failure','prior_stroke','dialysis',
+      'smoking_status','pad','functional_status','mfi5','procedure_count','last_procedure'];
+    const csv = [h.join(','),
+      ...rows.map(p => [
+        p.patient_id, p.mrn, p.last_name, p.first_name, p.date_of_birth,
+        calcAge(p.date_of_birth), p.sex || '', p.race || '',
+        p.hypertension||0, p.diabetes||0, p.coronary_artery_disease||0,
+        p.copd||0, p.heart_failure||0, p.prior_stroke||0, p.dialysis||0,
+        p.smoking_status||'', p.peripheral_artery_disease||0,
+        p.functional_status||'', mfi5(p), p.procedure_count||0, p.last_procedure_date||''
+      ].join(','))
+    ].join('\n');
+    window.electronAPI.saveFile(csv, 'cohort_export.csv');
+  }
+
   return (
     <div className="card">
       <div className="card-header">
-        <div className="card-title">Cohort Results ({cohort.length} patients)</div>
+        <div className="card-title">Cohort ({cohort.length} patients · {selectedRows.size} selected)</div>
+        <button className="btn btn-secondary btn-sm" onClick={exportCohortCSV} disabled={!selectedRows.size}>
+          ⬇ Export CSV
+        </button>
       </div>
       <div className="table-container">
         <table className="data-table">
           <thead>
             <tr>
-              <th><input type="checkbox" checked={selectedRows.size === cohort.length && cohort.length > 0}
+              <th><input type="checkbox"
+                checked={selectedRows.size === cohort.length && cohort.length > 0}
                 onChange={toggleAll} /></th>
+              {config.twoGroup && config.splitBy === 'custom' && <th>A / B</th>}
               <th>MRN</th><th>Patient</th><th>Age</th><th>Sex</th>
-              <th>DM</th><th>HTN</th><th>CAD</th><th>COPD</th><th>CKD</th>
-              <th>mFI-5</th><th>Procedures</th><th>Last Procedure</th>
+              <th>DM</th><th>HTN</th><th>CAD</th><th>COPD</th>
+              <th>mFI-5</th><th>Procs</th><th>Last Procedure</th>
             </tr>
           </thead>
           <tbody>
             {cohort.map(p => {
-              const mfi = calcMFI5(p);
-              const mfiColor = mfi >= 3 ? '#ef4444' : mfi >= 2 ? '#f59e0b' : '#10b981';
+              const score = mfi5(p);
+              const mfiColor = score >= 3 ? '#ef4444' : score >= 2 ? '#f59e0b' : '#10b981';
+              const inA = config.groupAIds.has(p.patient_id);
+              const inB = config.groupBIds.has(p.patient_id);
               return (
-                <tr key={p.patient_id} className={selectedRows.has(p.patient_id) ? 'selected-row' : ''}>
+                <tr key={p.patient_id}
+                  className={selectedRows.has(p.patient_id) ? 'selected-row' : ''}>
                   <td><input type="checkbox" checked={selectedRows.has(p.patient_id)}
                     onChange={() => toggleRow(p.patient_id)} /></td>
+                  {config.twoGroup && config.splitBy === 'custom' && (
+                    <td>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button
+                          style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                            background: inA ? '#1d4ed8' : '#1e293b', color: inA ? '#fff' : '#64748b' }}
+                          onClick={() => toggleCustomGroup(p.patient_id, 'A')}>A</button>
+                        <button
+                          style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 4, border: 'none', cursor: 'pointer',
+                            background: inB ? '#7c3aed' : '#1e293b', color: inB ? '#fff' : '#64748b' }}
+                          onClick={() => toggleCustomGroup(p.patient_id, 'B')}>B</button>
+                      </div>
+                    </td>
+                  )}
                   <td><span className="badge badge-secondary">{p.mrn}</span></td>
                   <td>
-                    <span className="link-text" onClick={() => onNavigatePatient(p.patient_id)}>
+                    <span className="link-text" onClick={() => onNavigate(p.patient_id)}>
                       {p.last_name}, {p.first_name}
                     </span>
                   </td>
@@ -319,12 +597,9 @@ function CohortResults({ cohort, selectedRows, toggleRow, toggleAll, calcAge, ca
                   <td>{p.hypertension ? <span className="badge badge-warning">Yes</span> : '—'}</td>
                   <td>{p.coronary_artery_disease ? <span className="badge badge-warning">Yes</span> : '—'}</td>
                   <td>{p.copd ? <span className="badge badge-warning">Yes</span> : '—'}</td>
-                  <td>{p.ckd_stage ? `Stage ${p.ckd_stage}` : '—'}</td>
-                  <td>
-                    <span style={{ fontWeight: 700, color: mfiColor }}>{mfi}/5</span>
-                  </td>
+                  <td><span style={{ fontWeight: 700, color: mfiColor }}>{score}/5</span></td>
                   <td>{p.procedure_count || 0}</td>
-                  <td>{p.last_procedure_date || '—'}</td>
+                  <td style={{ fontSize: 12 }}>{p.last_procedure_date || '—'}</td>
                 </tr>
               );
             })}
@@ -335,118 +610,309 @@ function CohortResults({ cohort, selectedRows, toggleRow, toggleAll, calcAge, ca
   );
 }
 
-function Table1View({ stats }) {
-  function fmt(s, type = 'mean') {
-    if (!s || s.n === 0) return '—';
-    if (type === 'mean') return `${s.mean} ± ${s.sd}`;
-    if (type === 'median') return `${s.median} [${s.iqr?.[0]}–${s.iqr?.[1]}]`;
-    return '—';
+// ─── Table 1 Engine ───────────────────────────────────────────────────────────
+
+function buildTable1Rows(rawA, rawB) {
+  const rows = [];
+  const twoGroup = rawB != null;
+  const nA = rawA.length;
+  const nB = rawB?.length ?? 0;
+
+  for (const varDef of TABLE1_VARS) {
+    if (varDef.section) { rows.push({ type: 'section', label: varDef.section }); continue; }
+
+    const valuesA = rawA.map(p => varDef.extract(p));
+    const valuesB = twoGroup ? rawB.map(p => varDef.extract(p)) : null;
+
+    const statA = summarize(valuesA, varDef.type, nA);
+    const statB = valuesB ? summarize(valuesB, varDef.type, nB) : null;
+    const p = (twoGroup && statA && statB) ? computeP(statA, statB, varDef.type) : null;
+
+    rows.push({ type: 'data', varDef, statA, statB, p, twoGroup });
   }
-  function fmtPct(s) {
-    if (!s) return '—';
-    return `${s.n} (${s.pct}%)`;
-  }
-  function fmtCat(obj) {
-    if (!obj) return '—';
-    return Object.entries(obj).map(([k, v]) => `${k}: ${v.n} (${v.pct}%)`).join('; ');
+  return rows;
+}
+
+function fmtContinuous(stat) {
+  if (!stat || stat.n === 0) return '—';
+  const meanSD = stat.mean != null ? `${stat.mean} ± ${stat.sd ?? '?'}` : null;
+  const medIQR = stat.median != null ? `${stat.median} [${stat.q1 ?? '?'}–${stat.q3 ?? '?'}]` : null;
+  if (!meanSD && !medIQR) return '—';
+  return (
+    <span>
+      {meanSD && <span>{meanSD}</span>}
+      {meanSD && medIQR && <br />}
+      {medIQR && <span style={{ fontSize: 11, color: '#94a3b8' }}>{medIQR}</span>}
+    </span>
+  );
+}
+
+function fmtBinary(stat) {
+  if (!stat || stat.n === 0) return '—';
+  return `${stat.count} (${stat.pct}%)`;
+}
+
+function fmtCategorical(stat) {
+  if (!stat || !stat.cats || !Object.keys(stat.cats).length) return '—';
+  return (
+    <span>
+      {Object.entries(stat.cats).map(([cat, cnt]) => (
+        <div key={cat} style={{ fontSize: 12 }}>
+          {cat}: {cnt} ({stat.n ? ((cnt / stat.n) * 100).toFixed(1) : 0}%)
+        </div>
+      ))}
+    </span>
+  );
+}
+
+function fmtMissing(stat, n) {
+  if (!stat) return '';
+  if (stat.missing === 0) return '';
+  return (
+    <div style={{ fontSize: 10, color: '#ef4444', marginTop: 2 }}>
+      {n - stat.missing}/{n} ({((( n - stat.missing) / n) * 100).toFixed(0)}% complete)
+    </div>
+  );
+}
+
+function Table1View({ data }) {
+  const { rawA, rawB, groupALabel, groupBLabel } = data;
+  const nA = rawA.length, nB = rawB?.length ?? 0;
+  const twoGroup = rawB != null;
+  const rows = buildTable1Rows(rawA, rawB);
+
+  function buildCsvText() {
+    const lines = [];
+    const header = twoGroup
+      ? `Variable,${groupALabel} (n=${nA}),${groupBLabel} (n=${nB}),p-value`
+      : `Variable,Overall (n=${nA})`;
+    lines.push(header);
+
+    for (const row of rows) {
+      if (row.type === 'section') { lines.push(`\n"── ${row.label}"`); continue; }
+      const { varDef, statA, statB, p } = row;
+      let cellA = '', cellB = '';
+      if (varDef.type === 'continuous') {
+        cellA = statA?.mean != null ? `"${statA.mean} ± ${statA.sd}"` : '—';
+        cellB = statB?.mean != null ? `"${statB.mean} ± ${statB.sd}"` : '—';
+      } else if (varDef.type === 'binary') {
+        cellA = statA ? `${statA.count} (${statA.pct}%)` : '—';
+        cellB = statB ? `${statB.count} (${statB.pct}%)` : '—';
+      } else {
+        cellA = statA?.cats ? Object.entries(statA.cats).map(([k, v]) => `${k}:${v}`).join('; ') : '—';
+        cellB = statB?.cats ? Object.entries(statB.cats).map(([k, v]) => `${k}:${v}`).join('; ') : '—';
+      }
+      if (twoGroup) {
+        lines.push(`"${varDef.label}","${cellA}","${cellB}","${p != null ? formatP(p) : '—'}"`);
+      } else {
+        lines.push(`"${varDef.label}","${cellA}"`);
+      }
+    }
+    return lines.join('\n');
   }
 
-  const rows = [
-    ['N', stats.n, ''],
-    ['— Demographics', '', ''],
-    ['Age (years)', fmt(stats.age, 'mean'), 'Mean ± SD'],
-    ['Age (years)', fmt(stats.age, 'median'), 'Median [IQR]'],
-    ['BMI (kg/m²)', fmt(stats.bmi, 'mean'), 'Mean ± SD'],
-    ['Sex', fmtCat(stats.sex), 'n (%)'],
-    ['Race', fmtCat(stats.race), 'n (%)'],
-    ['Smoking Status', fmtCat(stats.smoking), 'n (%)'],
-    ['— Comorbidities', '', ''],
-    ['Hypertension', fmtPct(stats.hypertension), 'n (%)'],
-    ['Diabetes Mellitus', fmtPct(stats.diabetes), 'n (%)'],
-    ['HbA1c (%)', fmt(stats.hba1c, 'mean'), 'Mean ± SD'],
-    ['Hyperlipidemia', fmtPct(stats.hyperlipidemia), 'n (%)'],
-    ['Coronary Artery Disease', fmtPct(stats.cad), 'n (%)'],
-    ['Heart Failure', fmtPct(stats.heart_failure), 'n (%)'],
-    ['COPD', fmtPct(stats.copd), 'n (%)'],
-    ['Prior Stroke / TIA', fmtPct(stats.prior_stroke), 'n (%)'],
-    ['CKD Stage', fmtCat(stats.ckd), 'n (%)'],
-    ['Dialysis', fmtPct(stats.dialysis), 'n (%)'],
-    ['Atrial Fibrillation', fmtPct(stats.afib), 'n (%)'],
-    ['Peripheral Artery Disease', fmtPct(stats.pad), 'n (%)'],
-    ['— Medications', '', ''],
-    ['Aspirin', fmtPct(stats.aspirin), 'n (%)'],
-    ['Statin', fmtPct(stats.statin), 'n (%)'],
-    ['Clopidogrel', fmtPct(stats.clopidogrel), 'n (%)'],
-    ['Beta-blocker', fmtPct(stats.beta_blocker), 'n (%)'],
-    ['Anticoagulant', fmtPct(stats.anticoagulant), 'n (%)'],
-  ];
-
-  function exportTable1() {
-    const csv = ['Variable,Value,Statistic',
-      ...rows.map(([v, val, stat]) => `"${v}","${val}","${stat}"`)
-    ].join('\n');
-    window.electronAPI.saveFile(csv, 'Table1_demographics.csv', [{ name: 'CSV Files', extensions: ['csv'] }]);
+  function handleExportCSV() {
+    window.electronAPI.saveFile(buildCsvText(), 'Table1_baseline_characteristics.csv',
+      [{ name: 'CSV Files', extensions: ['csv'] }]);
   }
+
+  function handleCopyClipboard() {
+    // Tab-separated for Excel paste
+    const lines = [];
+    const header = twoGroup
+      ? `Variable\t${groupALabel} (n=${nA})\t${groupBLabel} (n=${nB})\tp-value`
+      : `Variable\tOverall (n=${nA})\tStatistic`;
+    lines.push(header);
+
+    for (const row of rows) {
+      if (row.type === 'section') { lines.push(`\n── ${row.label}`); continue; }
+      const { varDef, statA, statB, p } = row;
+      let cellA = '', note = '';
+      if (varDef.type === 'continuous') {
+        cellA = statA?.mean != null ? `${statA.mean} ± ${statA.sd}` : '—';
+        note = 'Mean ± SD';
+      } else if (varDef.type === 'binary') {
+        cellA = statA ? `${statA.count} (${statA.pct}%)` : '—';
+        note = 'n (%)';
+      } else {
+        cellA = statA?.cats ? Object.entries(statA.cats).map(([k, v]) =>
+          `${k}: ${v} (${statA.n ? ((v / statA.n) * 100).toFixed(1) : 0}%)`).join('; ') : '—';
+        note = 'n (%)';
+      }
+      const cellB = twoGroup ? (varDef.type === 'continuous'
+        ? (statB?.mean != null ? `${statB.mean} ± ${statB.sd}` : '—')
+        : varDef.type === 'binary' ? (statB ? `${statB.count} (${statB.pct}%)` : '—')
+        : (statB?.cats ? Object.entries(statB.cats).map(([k, v]) =>
+          `${k}: ${v} (${statB.n ? ((v / statB.n) * 100).toFixed(1) : 0}%)`).join('; ') : '—')) : null;
+
+      if (twoGroup) lines.push(`${varDef.label}\t${cellA}\t${cellB}\t${p != null ? formatP(p) : '—'}`);
+      else lines.push(`${varDef.label}\t${cellA}\t${note}`);
+    }
+    navigator.clipboard.writeText(lines.join('\n')).then(() => {
+      alert('Table 1 copied to clipboard. Paste into Word or Excel.');
+    }).catch(() => {
+      alert('Clipboard not available. Use Export CSV instead.');
+    });
+  }
+
+  // Completeness summary
+  const totalVars = rows.filter(r => r.type === 'data').length;
+  const missingVars = rows.filter(r => r.type === 'data' && r.statA?.missing > 0).length;
 
   return (
-    <div className="card">
-      <div className="card-header">
-        <div className="card-title">Table 1 — Baseline Characteristics (n={stats.n})</div>
-        <button className="btn btn-secondary btn-sm" onClick={exportTable1}>⬇ Export CSV</button>
+    <div>
+      {/* Header actions */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div>
+          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>
+            Table 1 — Baseline Characteristics
+            {twoGroup ? ` (${groupALabel} vs ${groupBLabel})` : ` (n=${nA})`}
+          </span>
+          <span style={{ fontSize: 12, color: '#64748b', marginLeft: 12 }}>
+            {missingVars} of {totalVars} variables have missing data
+          </span>
+        </div>
+        <div className="btn-group">
+          <button className="btn btn-secondary" onClick={handleCopyClipboard}>📋 Copy (Excel/Word)</button>
+          <button className="btn btn-secondary" onClick={handleExportCSV}>⬇ Export CSV</button>
+        </div>
       </div>
-      <div className="table-container">
-        <table className="data-table">
-          <thead>
-            <tr><th style={{ width: '50%' }}>Variable</th><th>Value</th><th>Statistic</th></tr>
-          </thead>
-          <tbody>
-            {rows.map(([v, val, stat], i) => {
-              const isHeader = v.startsWith('—');
-              if (isHeader) {
+
+      <div className="card">
+        <div className="table-container">
+          <table className="data-table" style={{ fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ width: '34%' }}>Variable</th>
+                {twoGroup ? (
+                  <>
+                    <th style={{ width: '22%' }}>{groupALabel}<br /><span style={{ fontSize: 11, color: '#64748b', fontWeight: 400 }}>n = {nA}</span></th>
+                    <th style={{ width: '22%' }}>{groupBLabel}<br /><span style={{ fontSize: 11, color: '#64748b', fontWeight: 400 }}>n = {nB}</span></th>
+                    <th style={{ width: '12%' }}>p-value</th>
+                    <th style={{ width: '10%' }}>Test</th>
+                  </>
+                ) : (
+                  <>
+                    <th style={{ width: '30%' }}>Overall<br /><span style={{ fontSize: 11, color: '#64748b', fontWeight: 400 }}>n = {nA}</span></th>
+                    <th style={{ width: '16%' }}>Statistic</th>
+                    <th style={{ width: '20%' }}>Data Completeness</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => {
+                if (row.type === 'section') {
+                  return (
+                    <tr key={i} style={{ background: '#0f172a' }}>
+                      <td colSpan={twoGroup ? 5 : 4}
+                        style={{ fontWeight: 700, color: '#60a5fa', fontSize: 11,
+                          textTransform: 'uppercase', letterSpacing: 1, paddingTop: 14 }}>
+                        {row.label}
+                      </td>
+                    </tr>
+                  );
+                }
+                const { varDef, statA, statB, p } = row;
+                const indent = varDef.indent ? 16 : 0;
+                const pVal = p != null ? formatP(p) : '—';
+                const pCol = p != null ? pColor(p) : '#64748b';
+                const ast = p != null ? pAsterisks(p) : '';
+                const testLabel = varDef.type === 'continuous' ? 't' :
+                  (varDef.type === 'binary' && statA?.n < 20 ? 'Fx' : 'χ²');
+
                 return (
                   <tr key={i}>
-                    <td colSpan={3} style={{ fontWeight: 700, color: '#60a5fa', paddingTop: 12, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }}>
-                      {v.replace('— ', '')}
+                    <td style={{ paddingLeft: 16 + indent, fontStyle: varDef.indent ? 'italic' : 'normal' }}>
+                      {varDef.label}
                     </td>
+                    <td>
+                      {varDef.type === 'continuous' ? fmtContinuous(statA) :
+                        varDef.type === 'binary' ? fmtBinary(statA) :
+                        fmtCategorical(statA)}
+                      {!twoGroup && fmtMissing(statA, nA)}
+                    </td>
+                    {twoGroup ? (
+                      <>
+                        <td>
+                          {varDef.type === 'continuous' ? fmtContinuous(statB) :
+                            varDef.type === 'binary' ? fmtBinary(statB) :
+                            fmtCategorical(statB)}
+                          {fmtMissing(statB, nB)}
+                        </td>
+                        <td style={{ fontWeight: 700, color: pCol, fontFamily: 'monospace' }}>
+                          {pVal}
+                          {ast !== 'ns' && ast && (
+                            <span style={{ marginLeft: 4, fontSize: 14 }}>{ast}</span>
+                          )}
+                        </td>
+                        <td style={{ fontSize: 11, color: '#64748b' }}>{p != null ? testLabel : '—'}</td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={{ fontSize: 12, color: '#64748b' }}>
+                          {varDef.type === 'continuous' ? 'Mean ± SD / Median [IQR]' :
+                            varDef.type === 'binary' ? 'n (%)' : 'n (%)'}
+                        </td>
+                        <td>
+                          {statA?.missing > 0 ? (
+                            <span style={{ fontSize: 12, color: '#f59e0b' }}>
+                              {nA - statA.missing}/{nA} ({(((nA - statA.missing) / nA) * 100).toFixed(0)}%)
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: 12, color: '#10b981' }}>Complete</span>
+                          )}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 );
-              }
-              return (
-                <tr key={i}>
-                  <td style={{ paddingLeft: 16 }}>{v}</td>
-                  <td style={{ fontWeight: 600, fontFamily: 'monospace' }}>{val}</td>
-                  <td style={{ color: '#64748b', fontSize: 12 }}>{stat}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ padding: '8px 16px', fontSize: 12, color: '#64748b' }}>
-        Continuous variables: Mean ± SD or Median [IQR] · Categorical: n (%)
-        · Ready for direct use as Table 1 in publications.
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '8px 16px', fontSize: 11, color: '#475569', borderTop: '1px solid #1e293b' }}>
+          Continuous: Mean ± SD and Median [IQR] · Binary: n (%) · Chi-squared or Fisher's exact for categorical/binary · Welch's t-test for continuous
+          {twoGroup && ' · Significance: * p<0.05, ** p<0.01, *** p<0.001 (Fx = Fisher\'s exact)'}
+        </div>
       </div>
     </div>
   );
 }
 
-function TimeToEventView({ data, onExport }) {
+// ─── Time-to-Event View ───────────────────────────────────────────────────────
+
+function TimeToEventView({ data }) {
   const eventCount = data.filter(d => d.event_reintervention || d.event_death).length;
-  const medianDays = (() => {
-    const days = data.map(d => d.days_to_event).filter(d => d != null).sort((a, b) => a - b);
-    if (!days.length) return null;
-    const mid = Math.floor(days.length / 2);
-    return days.length % 2 === 0 ? ((days[mid - 1] + days[mid]) / 2).toFixed(0) : days[mid];
-  })();
+  const daysArr = data.map(d => d.days_to_event).filter(d => d != null).sort((a, b) => a - b);
+  const medDays = daysArr.length ? (daysArr.length % 2 === 0
+    ? ((daysArr[daysArr.length / 2 - 1] + daysArr[daysArr.length / 2]) / 2).toFixed(0)
+    : daysArr[Math.floor(daysArr.length / 2)]) : null;
+
+  function exportCSV() {
+    const h = ['patient_id','mrn','patient_name','procedure_id','procedure_type',
+      'procedure_date','days_to_event','event_reintervention','event_death',
+      'reintervention_date','death_date','last_followup_date'];
+    const csv = [h.join(','),
+      ...data.map(r => [
+        r.patient_id, r.mrn, `"${r.patient_name}"`, r.procedure_id, `"${r.procedure_type}"`,
+        r.procedure_date, r.days_to_event ?? '',
+        r.event_reintervention || 0, r.event_death || 0,
+        r.reintervention_date || '', r.death_date || '', r.last_followup_date || ''
+      ].join(','))
+    ].join('\n');
+    window.electronAPI.saveFile(csv, 'time_to_event_R_ready.csv',
+      [{ name: 'CSV Files', extensions: ['csv'] }]);
+  }
 
   return (
     <div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16, marginBottom: 16 }}>
         {[
           { label: 'Total Procedures', value: data.length, color: '#2563eb' },
-          { label: 'Events (Reintervention / Death)', value: eventCount, color: '#ef4444' },
+          { label: 'Events (Reintervention/Death)', value: eventCount, color: '#ef4444' },
           { label: 'Event Rate', value: data.length ? `${((eventCount / data.length) * 100).toFixed(1)}%` : '—', color: '#f59e0b' },
-          { label: 'Median Follow-up', value: medianDays ? `${medianDays}d` : '—', color: '#10b981' },
+          { label: 'Median Follow-up', value: medDays ? `${medDays}d` : '—', color: '#10b981' },
         ].map(s => (
           <div key={s.label} className="stat-card" style={{ borderTop: `3px solid ${s.color}` }}>
             <div className="stat-value" style={{ color: s.color }}>{s.value}</div>
@@ -454,22 +920,26 @@ function TimeToEventView({ data, onExport }) {
           </div>
         ))}
       </div>
-
       <div className="card">
         <div className="card-header">
-          <div className="card-title">Time-to-Event Data ({data.length} procedures)</div>
-          <button className="btn btn-secondary btn-sm" onClick={onExport}>⬇ Export CSV (R-ready)</button>
+          <div className="card-title">Time-to-Event ({data.length} procedures)</div>
+          <div className="btn-group">
+            <span style={{ fontSize: 12, color: '#64748b', alignSelf: 'center' }}>
+              Columns: days_to_event · event_reintervention · event_death
+            </span>
+            <button className="btn btn-secondary btn-sm" onClick={exportCSV}>⬇ Export R-ready CSV</button>
+          </div>
         </div>
-        <div style={{ padding: '8px 16px 0', fontSize: 12, color: '#64748b' }}>
-          Export columns: <code>days_to_event</code>, <code>event_reintervention</code>, <code>event_death</code>
-          — import directly into R <code>survival::Surv()</code> or GraphPad Prism for Kaplan-Meier curves.
+        <div style={{ padding: '6px 16px', fontSize: 12, color: '#64748b' }}>
+          Import into R: <code style={{ color: '#60a5fa' }}>read.csv("file.csv")</code> then{' '}
+          <code style={{ color: '#60a5fa' }}>Surv(days_to_event, event_reintervention)</code> for Kaplan-Meier.
         </div>
         <div className="table-container">
           <table className="data-table">
             <thead>
               <tr>
                 <th>Patient</th><th>MRN</th><th>Procedure</th><th>Date</th>
-                <th>Days to Event</th><th>Reintervention</th><th>Death</th><th>Last Follow-up</th>
+                <th>Days</th><th>Reintervention</th><th>Death</th><th>Last F/U</th>
               </tr>
             </thead>
             <tbody>
@@ -479,17 +949,9 @@ function TimeToEventView({ data, onExport }) {
                   <td><span className="badge badge-secondary">{d.mrn}</span></td>
                   <td style={{ fontSize: 12 }}>{d.procedure_type}</td>
                   <td>{d.procedure_date}</td>
-                  <td style={{ fontWeight: 600, fontFamily: 'monospace' }}>
-                    {d.days_to_event ?? '—'}
-                  </td>
-                  <td>{d.event_reintervention ?
-                    <span className="badge badge-danger">Yes</span> :
-                    <span style={{ color: '#10b981' }}>No</span>}
-                  </td>
-                  <td>{d.event_death ?
-                    <span className="badge badge-danger">Yes</span> :
-                    <span style={{ color: '#10b981' }}>No</span>}
-                  </td>
+                  <td style={{ fontWeight: 600, fontFamily: 'monospace' }}>{d.days_to_event ?? '—'}</td>
+                  <td>{d.event_reintervention ? <span className="badge badge-danger">Yes</span> : <span style={{ color: '#10b981', fontSize: 12 }}>No</span>}</td>
+                  <td>{d.event_death ? <span className="badge badge-danger">Yes</span> : <span style={{ color: '#10b981', fontSize: 12 }}>No</span>}</td>
                   <td>{d.last_followup_date || '—'}</td>
                 </tr>
               ))}

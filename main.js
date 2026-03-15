@@ -240,6 +240,11 @@ ipcMain.handle('alerts:getRedFlags', async () => {
 });
 
 // Research / Cohort
+ipcMain.handle('research:getPatientRawData', async (_, patientIds) => {
+  try { return { success: true, data: dbModule().getPatientRawData(patientIds || []) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
 ipcMain.handle('research:getCohort', async (_, filters) => {
   try { return { success: true, data: dbModule().getCohort(filters || {}) }; }
   catch (e) { return { success: false, error: e.message }; }
