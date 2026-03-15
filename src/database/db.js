@@ -21,8 +21,82 @@ function initDatabase() {
   db.pragma('foreign_keys = ON');
   db.pragma('journal_mode = WAL');
   db.exec(SCHEMA_SQL);
+  runMigrations();
   seedDefaultData();
+  seedConfigOptions();
   return db;
+}
+
+function runMigrations() {
+  // Add status / scheduled_date to followup if not present (existing DBs)
+  const fuCols = db.prepare('PRAGMA table_info(followup)').all().map(c => c.name);
+  if (!fuCols.includes('status')) {
+    db.exec("ALTER TABLE followup ADD COLUMN status TEXT DEFAULT 'scheduled'");
+  }
+  if (!fuCols.includes('scheduled_date')) {
+    db.exec('ALTER TABLE followup ADD COLUMN scheduled_date TEXT');
+  }
+}
+
+function seedConfigOptions() {
+  const n = db.prepare('SELECT COUNT(*) as n FROM config_options').get().n;
+  if (n > 0) return;
+
+  const rows = [
+    ['procedure_type','Carotid Endarterectomy'],
+    ['procedure_type','Carotid Artery Stenting'],
+    ['procedure_type','TCAR (TransCarotid Artery Revascularization)'],
+    ['procedure_type','EVAR (Endovascular Aortic Repair)'],
+    ['procedure_type','Open AAA Repair'],
+    ['procedure_type','Thoracic EVAR (TEVAR)'],
+    ['procedure_type','Fenestrated EVAR'],
+    ['procedure_type','Femoral-Popliteal Bypass'],
+    ['procedure_type','Femoral-Tibial Bypass'],
+    ['procedure_type','Aorto-Bifemoral Bypass'],
+    ['procedure_type','Femoral-Femoral Bypass'],
+    ['procedure_type','Axillo-Femoral Bypass'],
+    ['procedure_type','Aorto-Iliac Endarterectomy'],
+    ['procedure_type','Femoral Endarterectomy'],
+    ['procedure_type','Peripheral Angioplasty / Stenting'],
+    ['procedure_type','Thromboembolectomy'],
+    ['procedure_type','AV Fistula Creation'],
+    ['procedure_type','AV Graft Creation'],
+    ['procedure_type','Dialysis Catheter Insertion'],
+    ['procedure_type','Mesenteric Bypass'],
+    ['procedure_type','Renal Artery Stenting'],
+    ['procedure_type','Inferior Vena Cava Filter'],
+    ['procedure_type','Varicose Vein Ablation (EVLA/RFA)'],
+    ['procedure_type','Amputation'],
+    ['procedure_type','Other'],
+    ['ethnicity','Georgian'],
+    ['ethnicity','Armenian'],
+    ['ethnicity','Azerbaijani'],
+    ['ethnicity','Russian'],
+    ['ethnicity','Greek'],
+    ['ethnicity','Jewish'],
+    ['ethnicity','Ossetian'],
+    ['ethnicity','Abkhazian'],
+    ['ethnicity','Other'],
+    ['insurance','State Insurance'],
+    ['insurance','Private Insurance'],
+    ['insurance','Self-Pay'],
+    ['insurance','Military / Veteran'],
+    ['insurance','No Insurance'],
+    ['insurance','Other'],
+    ['urgency','Elective'],
+    ['urgency','Urgent'],
+    ['urgency','Emergency'],
+    ['anesthesia_type','General'],
+    ['anesthesia_type','Regional'],
+    ['anesthesia_type','Local'],
+    ['anesthesia_type','Monitored'],
+    ['hospital','Main Hospital'],
+    ['hospital','Day Surgery Center'],
+    ['hospital','Outpatient Clinic'],
+  ];
+
+  const stmt = db.prepare('INSERT OR IGNORE INTO config_options (category, value, sort_order) VALUES (?,?,?)');
+  rows.forEach(([cat, val], i) => stmt.run(cat, val, i));
 }
 
 function seedDefaultData() {
@@ -82,13 +156,23 @@ function getPatientById(patientId) {
   if (!patient) return null;
   patient.comorbidities = db.prepare('SELECT * FROM comorbidities WHERE patient_id = ?').get(patientId);
   patient.medications = db.prepare('SELECT * FROM medications WHERE patient_id = ?').get(patientId);
-  patient.procedures = db.prepare(`
+  const procs = db.prepare(`
     SELECT pr.*, s.first_name || ' ' || s.last_name AS surgeon_name
     FROM procedures pr
     LEFT JOIN surgeons s ON pr.surgeon_id = s.surgeon_id
     WHERE pr.patient_id = ?
     ORDER BY pr.procedure_date DESC
   `).all(patientId);
+
+  const followupStmt = db.prepare(
+    `SELECT followup_id, followup_interval, followup_date, scheduled_date,
+            COALESCE(status,'scheduled') AS status, alive, reintervention, amputation
+     FROM followup WHERE procedure_id = ? ORDER BY followup_date`
+  );
+  for (const proc of procs) {
+    proc.followups = followupStmt.all(proc.procedure_id);
+  }
+  patient.procedures = procs;
   return patient;
 }
 
@@ -244,7 +328,29 @@ function createProcedure(data) {
   if (pad_module) upsertModule('pad_module', 'pad_id', procedureId, pad_module);
   if (venous_module) upsertVenousModule(procedureId, venous_module);
 
+  autoScheduleFollowups(procedureId, procData.procedure_date);
+
   return { procedure_id: procedureId };
+}
+
+function autoScheduleFollowups(procedureId, procedureDate) {
+  if (!procedureDate) return;
+  const base = new Date(procedureDate + 'T00:00:00');
+  const schedules = [
+    { interval: '30 Day',  days: 30 },
+    { interval: '6 Month', days: 180 },
+    { interval: '1 Year',  days: 365 },
+  ];
+  const stmt = db.prepare(`
+    INSERT INTO followup (procedure_id, followup_date, followup_interval, status, scheduled_date, alive)
+    VALUES (@procedure_id, @followup_date, @followup_interval, 'scheduled', @scheduled_date, 1)
+  `);
+  for (const { interval, days } of schedules) {
+    const d = new Date(base);
+    d.setDate(d.getDate() + days);
+    const dateStr = d.toISOString().slice(0, 10);
+    stmt.run({ procedure_id: procedureId, followup_date: dateStr, followup_interval: interval, scheduled_date: dateStr });
+  }
 }
 
 function updateProcedure(procedureId, data) {
@@ -317,16 +423,27 @@ function getFollowups(procedureId) {
 }
 
 function createFollowup(data) {
-  const cols = Object.keys(data);
+  // If saving real clinical data, mark completed
+  const enriched = { status: 'completed', ...data };
+  const cols = Object.keys(enriched);
   const vals = cols.map(c => `@${c}`).join(', ');
-  const result = db.prepare(`INSERT INTO followup (${cols.join(', ')}) VALUES (${vals})`).run(data);
+  const result = db.prepare(`INSERT INTO followup (${cols.join(', ')}) VALUES (${vals})`).run(enriched);
   return { followup_id: result.lastInsertRowid };
 }
 
-function updateFollowup(followupId, data) {
-  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+function markScheduledFollowupComplete(followupId, data) {
+  const enriched = { ...data, status: 'completed' };
+  const fields = Object.keys(enriched).map(k => `${k} = @${k}`).join(', ');
   db.prepare(`UPDATE followup SET ${fields} WHERE followup_id = @followup_id`)
-    .run({ ...data, followup_id: followupId });
+    .run({ ...enriched, followup_id: followupId });
+  return { success: true };
+}
+
+function updateFollowup(followupId, data) {
+  const enriched = { status: 'completed', ...data };
+  const fields = Object.keys(enriched).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE followup SET ${fields} WHERE followup_id = @followup_id`)
+    .run({ ...enriched, followup_id: followupId });
   return { success: true };
 }
 
@@ -1028,11 +1145,42 @@ function upsertVenousModule(procedureId, data) {
   }
 }
 
+// ─── CONFIG OPTIONS ───────────────────────────────────────────────────────────
+
+function getConfigOptions(category) {
+  if (category) {
+    return db.prepare('SELECT * FROM config_options WHERE category = ? AND active = 1 ORDER BY sort_order, value').all(category);
+  }
+  return db.prepare('SELECT * FROM config_options WHERE active = 1 ORDER BY category, sort_order, value').all();
+}
+
+function getAllConfigOptions() {
+  return db.prepare('SELECT * FROM config_options ORDER BY category, sort_order, value').all();
+}
+
+function createConfigOption(data) {
+  const result = db.prepare(
+    'INSERT OR IGNORE INTO config_options (category, value, sort_order) VALUES (@category, @value, @sort_order)'
+  ).run({ sort_order: 0, ...data });
+  return { option_id: result.lastInsertRowid };
+}
+
+function updateConfigOption(id, data) {
+  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE config_options SET ${fields} WHERE option_id = @option_id`).run({ ...data, option_id: id });
+  return { success: true };
+}
+
+function deleteConfigOption(id) {
+  db.prepare('DELETE FROM config_options WHERE option_id = ?').run(id);
+  return { success: true };
+}
+
 module.exports = {
   initDatabase, loginUser,
   getPatients, getPatientById, createPatient, updatePatient, deletePatient,
   getProcedures, getProcedureById, createProcedure, updateProcedure, deleteProcedure,
-  getFollowups, createFollowup, updateFollowup, deleteFollowup,
+  getFollowups, createFollowup, updateFollowup, deleteFollowup, markScheduledFollowupComplete,
   getSurgeons, createSurgeon, updateSurgeon,
   getUsers, createUser, updateUser, deleteUser,
   getDashboardStats, getReportData,
@@ -1042,5 +1190,6 @@ module.exports = {
   getRedFlags, getCohort, getTable1Stats, getTimeToEvent, getTable2RawData,
   getDevices, createDevice, updateDevice, deleteDevice,
   getPhotos, createPhoto, deletePhoto,
-  upsertVenousModule
+  upsertVenousModule,
+  getConfigOptions, getAllConfigOptions, createConfigOption, updateConfigOption, deleteConfigOption,
 };

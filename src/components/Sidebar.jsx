@@ -14,6 +14,7 @@ const NAV_ITEMS = [
   { id: 'research', label: 'Research Workspace', icon: '🔬' },
   { section: 'Administration' },
   { id: 'users', label: 'User Management', icon: '👤' },
+  { id: 'admin-config', label: 'Dropdown Config', icon: '⚙️' },
   { id: 'backup', label: 'Backup & Settings', icon: '💾' },
 ];
 
@@ -40,7 +41,7 @@ export default function Sidebar({ currentView, onNavigate, onLogout, user }) {
             return <div key={i} className="sidebar-section-label">{item.section}</div>;
           }
           // Only show admin items to administrators
-          if ((item.id === 'users' || item.id === 'backup') && user?.role !== 'administrator') {
+          if ((item.id === 'users' || item.id === 'backup' || item.id === 'admin-config') && user?.role !== 'administrator') {
             return null;
           }
           return (

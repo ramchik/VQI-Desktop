@@ -72,5 +72,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openPhotoFile: (filePath) => ipcRenderer.invoke('photos:openFile', filePath),
 
   // Venous module
-  upsertVenous: (procedureId, data) => ipcRenderer.invoke('venous:upsert', { procedureId, data })
+  upsertVenous: (procedureId, data) => ipcRenderer.invoke('venous:upsert', { procedureId, data }),
+
+  // Config Options (Admin panel)
+  getAllConfigOptions: () => ipcRenderer.invoke('config:getAll'),
+  getConfigByCategory: (category) => ipcRenderer.invoke('config:getByCategory', category),
+  createConfigOption: (data) => ipcRenderer.invoke('config:create', data),
+  updateConfigOption: (id, data) => ipcRenderer.invoke('config:update', { id, data }),
+  deleteConfigOption: (id) => ipcRenderer.invoke('config:delete', id),
+
+  // Complete a scheduled follow-up
+  completeFollowup: (id, data) => ipcRenderer.invoke('followup:complete', { id, data }),
 });

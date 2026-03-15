@@ -198,11 +198,23 @@ CREATE TABLE IF NOT EXISTS postoperative (
   followup_date TEXT
 );
 
+CREATE TABLE IF NOT EXISTS config_options (
+  option_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  category TEXT NOT NULL,
+  value TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(category, value)
+);
+
 CREATE TABLE IF NOT EXISTS followup (
   followup_id INTEGER PRIMARY KEY AUTOINCREMENT,
   procedure_id INTEGER NOT NULL REFERENCES procedures(procedure_id) ON DELETE CASCADE,
   followup_date TEXT NOT NULL,
   followup_interval TEXT CHECK(followup_interval IN ('30 Day','6 Month','1 Year','2 Year','3 Year','4 Year','5 Year','Annual')),
+  status TEXT DEFAULT 'scheduled' CHECK(status IN ('scheduled','completed','missed','cancelled')),
+  scheduled_date TEXT,
   alive INTEGER DEFAULT 1,
   cause_of_death TEXT,
   reintervention INTEGER DEFAULT 0,
@@ -393,6 +405,7 @@ CREATE INDEX IF NOT EXISTS idx_procedures_patient ON procedures(patient_id);
 CREATE INDEX IF NOT EXISTS idx_procedures_date ON procedures(procedure_date);
 CREATE INDEX IF NOT EXISTS idx_procedures_type ON procedures(procedure_type);
 CREATE INDEX IF NOT EXISTS idx_followup_procedure ON followup(procedure_id);
+CREATE INDEX IF NOT EXISTS idx_config_options_category ON config_options(category, active);
 CREATE INDEX IF NOT EXISTS idx_postop_procedure ON postoperative(procedure_id);
 CREATE INDEX IF NOT EXISTS idx_intraop_procedure ON intraoperative(procedure_id);
 `;

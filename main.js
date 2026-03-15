@@ -359,3 +359,35 @@ ipcMain.handle('shell:openPath', async (_, filePath) => {
   shell.showItemInFolder(filePath);
   return { success: true };
 });
+
+// Config Options
+ipcMain.handle('config:getAll', async () => {
+  try { return { success: true, data: dbModule().getAllConfigOptions() }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('config:getByCategory', async (_, category) => {
+  try { return { success: true, data: dbModule().getConfigOptions(category) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('config:create', async (_, data) => {
+  try { return { success: true, data: dbModule().createConfigOption(data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('config:update', async (_, { id, data }) => {
+  try { return { success: true, data: dbModule().updateConfigOption(id, data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('config:delete', async (_, id) => {
+  try { return { success: true, data: dbModule().deleteConfigOption(id) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+// Mark scheduled follow-up as completed
+ipcMain.handle('followup:complete', async (_, { id, data }) => {
+  try { return { success: true, data: dbModule().markScheduledFollowupComplete(id, data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});

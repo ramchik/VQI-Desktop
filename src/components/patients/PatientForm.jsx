@@ -577,56 +577,148 @@ function ProceduresTab({ procedures, patientId, navigate }) {
     </div>
   );
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  function fuStatus(fu) {
+    if (fu.status === 'completed') return 'completed';
+    const d = new Date((fu.scheduled_date || fu.followup_date) + 'T00:00:00');
+    if (d < today) return 'overdue';
+    return 'scheduled';
+  }
+
+  const statusStyle = {
+    completed: { bg: '#052e16', border: '#166534', dot: '#22c55e', label: 'Completed', icon: '✓' },
+    scheduled: { bg: '#172554', border: '#1e3a8a', dot: '#3b82f6', label: 'Scheduled', icon: '○' },
+    overdue:   { bg: '#450a0a', border: '#991b1b', dot: '#ef4444', label: 'Overdue',   icon: '!' },
+  };
+
   return (
-    <div className="card">
-      <div className="card-header">
-        <div className="card-title">Recorded Procedures ({procedures.length})</div>
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: '1rem', color: '#f1f5f9' }}>
+          Patient Timeline — {procedures.length} procedure{procedures.length !== 1 ? 's' : ''}
+        </div>
         <button className="btn btn-primary btn-sm" onClick={() => navigate('procedure-new', { patientId })}>
           + Add Procedure
         </button>
       </div>
-      <div className="table-container" style={{ border: 'none' }}>
-        <table>
-          <thead>
-            <tr>
-              <th>Date</th>
-              <th>Procedure Type</th>
-              <th>Surgeon</th>
-              <th>Urgency</th>
-              <th>Follow-ups</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {procedures.map(pr => (
-              <tr key={pr.procedure_id}>
-                <td>{pr.procedure_date ? new Date(pr.procedure_date + 'T00:00:00').toLocaleDateString() : '—'}</td>
-                <td>
-                  <span className="table-link" onClick={() => navigate('procedure-edit', { procedureId: pr.procedure_id })}>
-                    {pr.procedure_type}
-                  </span>
-                </td>
-                <td>{pr.surgeon_name || '—'}</td>
-                <td>
-                  <span className={`badge badge-${pr.urgency === 'Emergency' ? 'danger' : pr.urgency === 'Urgent' ? 'warning' : 'success'}`}>
-                    {pr.urgency || '—'}
-                  </span>
-                </td>
-                <td>
-                  <button className="btn btn-ghost btn-sm" onClick={() => navigate('followup', { procedureId: pr.procedure_id })}>
-                    Follow-ups
-                  </button>
-                </td>
-                <td>
-                  <button className="btn btn-ghost btn-sm"
-                    onClick={() => navigate('procedure-edit', { procedureId: pr.procedure_id })}>
-                    ✏️ Edit
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+
+      <div style={{ position: 'relative' }}>
+        {/* Vertical line */}
+        <div style={{
+          position: 'absolute', left: 19, top: 28, bottom: 28,
+          width: 2, background: '#334155', zIndex: 0
+        }} />
+
+        {procedures.map((pr, idx) => {
+          const followups = pr.followups || [];
+          const completed = followups.filter(f => f.status === 'completed').length;
+          const total = followups.length;
+
+          return (
+            <div key={pr.procedure_id} style={{ display: 'flex', gap: 16, marginBottom: 20, position: 'relative', zIndex: 1 }}>
+              {/* Timeline dot */}
+              <div style={{
+                width: 40, height: 40, borderRadius: '50%', flexShrink: 0,
+                background: '#1e3a8a', border: '2px solid #3b82f6',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 16, marginTop: 8
+              }}>🔬</div>
+
+              {/* Procedure card */}
+              <div style={{
+                flex: 1, background: '#1e293b', border: '1px solid #334155',
+                borderRadius: 10, padding: '14px 18px'
+              }}>
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                  <div>
+                    <div
+                      style={{ fontWeight: 700, fontSize: '1rem', color: '#60a5fa', cursor: 'pointer', marginBottom: 4 }}
+                      onClick={() => navigate('procedure-edit', { procedureId: pr.procedure_id })}
+                    >
+                      {pr.procedure_type}
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#94a3b8', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                      <span>📅 {pr.procedure_date ? new Date(pr.procedure_date + 'T00:00:00').toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' }) : '—'}</span>
+                      {pr.surgeon_name && <span>👨‍⚕️ {pr.surgeon_name}</span>}
+                      {pr.hospital && <span>🏥 {pr.hospital}</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {pr.urgency && (
+                      <span className={`badge badge-${pr.urgency === 'Emergency' ? 'danger' : pr.urgency === 'Urgent' ? 'warning' : 'success'}`}>
+                        {pr.urgency}
+                      </span>
+                    )}
+                    <button className="btn btn-ghost btn-sm"
+                      onClick={() => navigate('procedure-edit', { procedureId: pr.procedure_id })}>
+                      ✏️ Edit
+                    </button>
+                    <button className="btn btn-ghost btn-sm"
+                      onClick={() => navigate('followup', { procedureId: pr.procedure_id })}>
+                      + Follow-up
+                    </button>
+                  </div>
+                </div>
+
+                {/* Follow-up schedule */}
+                {followups.length > 0 && (
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #334155' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase',
+                      letterSpacing: '0.06em', color: '#64748b', marginBottom: 10 }}>
+                      Follow-up Schedule ({completed}/{total} completed)
+                    </div>
+                    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                      {followups.map(fu => {
+                        const st = fuStatus(fu);
+                        const s = statusStyle[st];
+                        const dateStr = fu.followup_date
+                          ? new Date(fu.followup_date + 'T00:00:00').toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' })
+                          : '—';
+                        return (
+                          <div
+                            key={fu.followup_id}
+                            onClick={() => navigate('followup', { procedureId: pr.procedure_id })}
+                            style={{
+                              background: s.bg, border: `1px solid ${s.border}`,
+                              borderRadius: 8, padding: '7px 12px', cursor: 'pointer',
+                              minWidth: 120, transition: 'opacity 0.15s'
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                              <span style={{ color: s.dot, fontWeight: 700, fontSize: 13 }}>{s.icon}</span>
+                              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#e2e8f0' }}>
+                                {fu.followup_interval}
+                              </span>
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{dateStr}</div>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 600, color: s.dot, marginTop: 2 }}>
+                              {s.label}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {followups.length === 0 && (
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid #334155' }}>
+                    <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                      No follow-ups scheduled —
+                      <span style={{ color: '#60a5fa', cursor: 'pointer', marginLeft: 4 }}
+                        onClick={() => navigate('followup', { procedureId: pr.procedure_id })}>
+                        Add first follow-up
+                      </span>
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
