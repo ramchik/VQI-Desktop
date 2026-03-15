@@ -74,7 +74,7 @@ function ViewRenderer({ view, params }) {
     case 'dashboard': return <Dashboard />;
     case 'patients': return <PatientList />;
     case 'patient-new': return <PatientForm />;
-    case 'patient-edit': return <PatientForm patientId={params.patientId} />;
+    case 'patient-edit': return <PatientForm patientId={params.patientId} defaultTab={params.defaultTab} />;
     case 'patient-view': return <PatientForm patientId={params.patientId} readOnly={false} />;
     case 'procedure-new': return <ProcedureForm patientId={params.patientId} />;
     case 'procedure-edit': return <ProcedureForm procedureId={params.procedureId} />;
