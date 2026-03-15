@@ -208,6 +208,163 @@ export function fisherExact(a, b, c, d) {
 
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
 
+// ─── Normal distribution (Abramowitz & Stegun 26.2.17, max error 1.5e-7) ─────
+
+function erf(x) {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x));
+  const p = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))));
+  const v = 1 - p * Math.exp(-x * x);
+  return x >= 0 ? v : -v;
+}
+
+function normalCDF(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
+
+// ─── Kaplan-Meier estimator ───────────────────────────────────────────────────
+
+/**
+ * Compute Kaplan-Meier survival estimates.
+ * data: array of { time, status } (status 1=event, 0=censored)
+ * Returns [{ time, survival, nAtRisk, nEvents }, ...]
+ */
+export function kaplanMeier(data) {
+  const valid = data.filter(d => d.time != null && d.time >= 0);
+  if (!valid.length) return [];
+  const sorted = [...valid].sort((a, b) => a.time - b.time);
+  const evtTimes = [...new Set(sorted.filter(d => d.status === 1).map(d => d.time))].sort((a, b) => a - b);
+  let S = 1;
+  const result = [{ time: 0, survival: 1, nAtRisk: sorted.length, nEvents: 0 }];
+  for (const t of evtTimes) {
+    const nAtRisk = sorted.filter(d => d.time >= t).length;
+    const nEvents = sorted.filter(d => d.time === t && d.status === 1).length;
+    S *= (1 - nEvents / nAtRisk);
+    result.push({ time: t, survival: +S.toFixed(4), nAtRisk, nEvents });
+  }
+  return result;
+}
+
+/** Median survival: time when KM curve first drops to ≤0.5. null if not reached. */
+export function medianSurvival(kmData) {
+  const crossed = kmData.find(d => d.survival <= 0.5);
+  return crossed ? crossed.time : null;
+}
+
+// ─── Log-Rank (Mantel-Cox) test ───────────────────────────────────────────────
+
+/**
+ * Log-Rank test comparing two survival curves.
+ * groupA / groupB: arrays of { time, status } (status 1=event, 0=censored)
+ * Returns { chi2, p } or null.
+ */
+export function logRankTest(groupA, groupB) {
+  const vA = groupA.filter(d => d.time != null && d.time >= 0);
+  const vB = groupB.filter(d => d.time != null && d.time >= 0);
+  if (!vA.length || !vB.length) return null;
+  const evtTimes = [...new Set([
+    ...vA.filter(d => d.status === 1).map(d => d.time),
+    ...vB.filter(d => d.status === 1).map(d => d.time)
+  ])].sort((a, b) => a - b);
+  if (!evtTimes.length) return null;
+
+  let O1 = 0, E1 = 0, V = 0;
+  for (const t of evtTimes) {
+    const n1 = vA.filter(d => d.time >= t).length;
+    const n2 = vB.filter(d => d.time >= t).length;
+    const n = n1 + n2;
+    if (n === 0) continue;
+    const d1 = vA.filter(d => d.time === t && d.status === 1).length;
+    const d2 = vB.filter(d => d.time === t && d.status === 1).length;
+    const d = d1 + d2;
+    O1 += d1; E1 += d * n1 / n;
+    if (n > 1) V += d * n1 * n2 * (n - d) / (n * n * (n - 1));
+  }
+  if (V === 0) return null;
+  const chi2 = (O1 - E1) ** 2 / V;
+  return { chi2: +chi2.toFixed(3), p: clamp01(1 - chiSquaredCDF(chi2, 1)) };
+}
+
+// ─── Odds Ratio (2×2 table with Haldane-Anscombe correction) ─────────────────
+
+/**
+ * Odds Ratio with 95% CI and Wald p-value from a 2×2 table.
+ * a/b = group1 events/non-events · c/d = group2 events/non-events.
+ * Haldane-Anscombe (+0.5) applied when any cell is zero.
+ */
+export function oddsRatio(a, b, c, d) {
+  if (a + b === 0 || c + d === 0) return null;
+  let aa = a, bb = b, cc = c, dd = d;
+  if (aa === 0 || bb === 0 || cc === 0 || dd === 0) {
+    aa += 0.5; bb += 0.5; cc += 0.5; dd += 0.5;
+  }
+  const or = (aa * dd) / (bb * cc);
+  const logOR = Math.log(or);
+  const se = Math.sqrt(1/aa + 1/bb + 1/cc + 1/dd);
+  const z = logOR / se;
+  return {
+    OR: +or.toFixed(2),
+    CI_lo: +Math.exp(logOR - 1.96 * se).toFixed(2),
+    CI_hi: +Math.exp(logOR + 1.96 * se).toFixed(2),
+    p: clamp01(2 * (1 - normalCDF(Math.abs(z))))
+  };
+}
+
+// ─── Cox Proportional Hazards (univariate, binary group covariate) ────────────
+
+/**
+ * Univariate Cox PH with Breslow tie correction.
+ * groupA / groupB: arrays of { time, status } (status 1=event, 0=censored).
+ * Returns { HR, CI_lo, CI_hi, p } where HR = hazard of group B vs group A.
+ */
+export function coxPH(groupA, groupB) {
+  const data = [
+    ...groupA.filter(d => d.time > 0).map(d => ({ time: d.time, status: d.status, x: 0 })),
+    ...groupB.filter(d => d.time > 0).map(d => ({ time: d.time, status: d.status, x: 1 }))
+  ];
+  if (data.length < 5) return null;
+  const evtTimes = [...new Set(data.filter(d => d.status === 1).map(d => d.time))].sort((a, b) => a - b);
+  if (!evtTimes.length) return null;
+
+  // Newton-Raphson: maximize partial log-likelihood
+  let beta = 0;
+  for (let iter = 0; iter < 100; iter++) {
+    let grad = 0, info = 0;
+    for (const t of evtTimes) {
+      const risk = data.filter(d => d.time >= t);
+      const evts = data.filter(d => d.time === t && d.status === 1);
+      const S0 = risk.reduce((s, d) => s + Math.exp(d.x * beta), 0);
+      const S1 = risk.reduce((s, d) => s + d.x * Math.exp(d.x * beta), 0);
+      const S2 = risk.reduce((s, d) => s + d.x * d.x * Math.exp(d.x * beta), 0);
+      if (S0 === 0) continue;
+      grad += evts.reduce((s, d) => s + d.x, 0) - evts.length * S1 / S0;
+      info += evts.length * (S2 / S0 - (S1 / S0) ** 2);
+    }
+    if (Math.abs(info) < 1e-12) break;
+    const step = grad / info;
+    beta += step;
+    if (Math.abs(step) < 1e-8) break;
+  }
+
+  // Fisher information at convergence
+  let info = 0;
+  for (const t of evtTimes) {
+    const risk = data.filter(d => d.time >= t);
+    const evts = data.filter(d => d.time === t && d.status === 1);
+    const S0 = risk.reduce((s, d) => s + Math.exp(d.x * beta), 0);
+    const S1 = risk.reduce((s, d) => s + d.x * Math.exp(d.x * beta), 0);
+    const S2 = risk.reduce((s, d) => s + d.x * d.x * Math.exp(d.x * beta), 0);
+    if (S0 === 0) continue;
+    info += evts.length * (S2 / S0 - (S1 / S0) ** 2);
+  }
+  if (info <= 0) return null;
+  const se = Math.sqrt(1 / info);
+  const z = beta / se;
+  return {
+    HR: +Math.exp(beta).toFixed(2),
+    CI_lo: +Math.exp(beta - 1.96 * se).toFixed(2),
+    CI_hi: +Math.exp(beta + 1.96 * se).toFixed(2),
+    p: clamp01(2 * (1 - normalCDF(Math.abs(z))))
+  };
+}
+
 // ─── Formatting ───────────────────────────────────────────────────────────────
 
 /**

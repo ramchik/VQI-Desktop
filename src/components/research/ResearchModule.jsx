@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../App';
 import {
   calcAge, summarize, computeP,
-  formatP, pColor, pAsterisks
+  formatP, pColor, pAsterisks,
+  logRankTest, oddsRatio, coxPH, kaplanMeier, medianSurvival
 } from '../../utils/stats';
 
 const PROCEDURE_TYPES = [
@@ -147,6 +148,9 @@ export default function ResearchModule() {
   // Time-to-event state
   const [timeToEvent, setTimeToEvent] = useState(null);
 
+  // Table 2 state
+  const [table2Data, setTable2Data] = useState(null);
+
   useEffect(() => {
     window.electronAPI.getSurgeons().then(r => { if (r.success) setSurgeons(r.data); });
   }, []);
@@ -155,7 +159,7 @@ export default function ResearchModule() {
 
   async function runCohortQuery() {
     setLoading(true);
-    setCohort(null); setTable1Data(null); setTimeToEvent(null);
+    setCohort(null); setTable1Data(null); setTimeToEvent(null); setTable2Data(null);
     setSelectedRows(new Set()); setT1Config(c => ({ ...c, groupAIds: new Set(), groupBIds: new Set() }));
     try {
       const cleanFilters = Object.fromEntries(
@@ -212,6 +216,46 @@ export default function ResearchModule() {
     } finally { setLoading(false); }
   }
 
+  async function generateTable2() {
+    if (!cohort) return;
+    setLoading(true);
+    try {
+      let groupAIds, groupBIds;
+      let groupALabel = t1Config.groupALabel, groupBLabel = t1Config.groupBLabel;
+
+      if (t1Config.twoGroup) {
+        if (t1Config.splitBy === 'procedure_type') {
+          groupAIds = cohort.filter(p => p.last_procedure_type === t1Config.groupAProcType).map(p => p.patient_id);
+          groupBIds = cohort.filter(p => p.last_procedure_type === t1Config.groupBProcType).map(p => p.patient_id);
+        } else if (t1Config.splitBy === 'sex') {
+          groupAIds = cohort.filter(p => p.sex === 'Male').map(p => p.patient_id);
+          groupBIds = cohort.filter(p => p.sex === 'Female').map(p => p.patient_id);
+          groupALabel = 'Male'; groupBLabel = 'Female';
+        } else {
+          groupAIds = [...t1Config.groupAIds];
+          groupBIds = [...t1Config.groupBIds];
+        }
+        if (!groupAIds.length || !groupBIds.length) {
+          alert('Both groups must have at least 1 patient.');
+          setLoading(false); return;
+        }
+      } else {
+        groupAIds = [...selectedRows];
+      }
+
+      const allIds = t1Config.twoGroup ? [...new Set([...groupAIds, ...groupBIds])] : groupAIds;
+      const res = await window.electronAPI.getTable2Data(allIds);
+      if (!res.success) { alert('Error: ' + res.error); return; }
+
+      const rows = res.data;
+      const rowsA = rows.filter(r => groupAIds.includes(r.patient_id));
+      const rowsB = t1Config.twoGroup ? rows.filter(r => groupBIds.includes(r.patient_id)) : null;
+
+      setTable2Data({ rowsA, rowsB, groupALabel, groupBLabel, twoGroup: t1Config.twoGroup });
+      setActiveTab('table2');
+    } finally { setLoading(false); }
+  }
+
   async function generateTTE() {
     const ids = [...selectedRows];
     if (!ids.length) return;
@@ -243,6 +287,7 @@ export default function ResearchModule() {
   const tabs = [
     { id: 'cohort', label: '🔍 Cohort Builder' },
     ...(table1Data ? [{ id: 'table1', label: '📋 Table 1' }] : []),
+    ...(table2Data ? [{ id: 'table2', label: '📊 Table 2' }] : []),
     ...(timeToEvent ? [{ id: 'tte', label: '📈 Time-to-Event' }] : []),
   ];
 
@@ -260,6 +305,8 @@ export default function ResearchModule() {
             </span>
             <button className="btn btn-secondary" onClick={generateTable1}
               disabled={!selectedRows.size || loading}>📋 Table 1</button>
+            <button className="btn btn-secondary" onClick={generateTable2}
+              disabled={!selectedRows.size || loading}>📊 Table 2</button>
             <button className="btn btn-secondary" onClick={generateTTE}
               disabled={!selectedRows.size || loading}>📈 Time-to-Event</button>
           </div>
@@ -294,6 +341,10 @@ export default function ResearchModule() {
 
       {activeTab === 'table1' && table1Data && (
         <Table1View data={table1Data} />
+      )}
+
+      {activeTab === 'table2' && table2Data && (
+        <Table2View data={table2Data} />
       )}
 
       {activeTab === 'tte' && timeToEvent && (
@@ -958,6 +1009,389 @@ function TimeToEventView({ data }) {
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Table 2 Engine ───────────────────────────────────────────────────────────
+
+const TABLE2_30DAY = [
+  { key: 'mace',             label: 'MACE (Death / MI / Stroke)' },
+  { key: 'death_30_day',     label: 'All-cause mortality' },
+  { key: 'stroke',           label: 'Stroke / TIA' },
+  { key: 'mi',               label: 'Myocardial infarction' },
+  { key: 'aki',              label: 'AKI (renal failure / dialysis)' },
+  { key: 'major_bleeding',   label: 'Major bleeding (requiring transfusion)' },
+  { key: 'reoperation',      label: 'Reoperation / reintervention' },
+  { key: 'amputation_30d',   label: 'Amputation (30-day)' },
+  { key: 'technical_success',label: 'Technical success', invertColor: true },
+];
+
+const TABLE2_TTE = [
+  { key: 'primary_patency',   label: 'Primary patency',   eventDateKey: 'primary_patency_loss_date' },
+  { key: 'secondary_patency', label: 'Secondary patency',  eventDateKey: 'secondary_patency_loss_date' },
+  { key: 'limb_salvage',      label: 'Limb salvage',       eventDateKey: 'major_amputation_date' },
+  { key: 'overall_survival',  label: 'Overall survival',   eventDateKey: 'death_date_fu' },
+];
+
+function daysBetween(dateA, dateB) {
+  if (!dateA || !dateB) return null;
+  const d = Math.round((new Date(dateB) - new Date(dateA)) / 86400000);
+  return d >= 0 ? d : null;
+}
+
+function buildTTEData(rows, eventDateKey) {
+  return rows.map(r => {
+    const eventDate = r[eventDateKey];
+    const refDate = r.procedure_date;
+    const lastFU = r.last_followup_date;
+    if (!refDate) return null;
+    const time = eventDate
+      ? (daysBetween(refDate, eventDate) ?? 0)
+      : (lastFU ? (daysBetween(refDate, lastFU) ?? 0) : r.days_since_procedure ?? 0);
+    return { time: Math.max(0, time), status: eventDate ? 1 : 0 };
+  }).filter(Boolean);
+}
+
+function fmtCI(res) {
+  if (!res) return '—';
+  return `${res.OR ?? res.HR} (${res.CI_lo}–${res.CI_hi})`;
+}
+
+// ─── Table 2 View ─────────────────────────────────────────────────────────────
+
+function Table2View({ data }) {
+  const { rowsA, rowsB, groupALabel, groupBLabel, twoGroup } = data;
+  const nA = rowsA.length, nB = rowsB?.length ?? 0;
+  const [showMissMap, setShowMissMap] = useState(false);
+
+  // ── 30-day stats ──────────────────────────────────────────────────────────
+  function count30(rows, key) {
+    const events = rows.filter(r => r[key] === 1).length;
+    const pct = rows.length ? ((events / rows.length) * 100).toFixed(1) : '—';
+    return { events, n: rows.length, pct };
+  }
+
+  const rows30 = TABLE2_30DAY.map(def => {
+    const cA = count30(rowsA, def.key);
+    const cB = twoGroup ? count30(rowsB, def.key) : null;
+    const or = (twoGroup && cA && cB)
+      ? oddsRatio(cA.events, cA.n - cA.events, cB.events, cB.n - cB.events)
+      : null;
+    return { ...def, cA, cB, or };
+  });
+
+  // ── TTE stats ─────────────────────────────────────────────────────────────
+  const rowsTTE = TABLE2_TTE.map(def => {
+    const tteA = buildTTEData(rowsA, def.eventDateKey);
+    const tteB = twoGroup ? buildTTEData(rowsB, def.eventDateKey) : null;
+    const kmA = kaplanMeier(tteA);
+    const kmB = tteB ? kaplanMeier(tteB) : null;
+    const medA = medianSurvival(kmA);
+    const medB = kmB ? medianSurvival(kmB) : null;
+    const eventsA = tteA.filter(d => d.status === 1).length;
+    const eventsB = tteB ? tteB.filter(d => d.status === 1).length : null;
+    const lr = (twoGroup && tteB) ? logRankTest(tteA, tteB) : null;
+    const cox = (twoGroup && tteB) ? coxPH(tteA, tteB) : null;
+    return { ...def, tteA, tteB, kmA, kmB, medA, medB, eventsA, eventsB, lr, cox };
+  });
+
+  // ── Missingness map ───────────────────────────────────────────────────────
+  const allRows = twoGroup ? [...rowsA, ...rowsB] : rowsA;
+  function missingKey(r) {
+    const needsFollowup = r.days_since_procedure > 365;
+    const miss1yr = needsFollowup && !r.has_1yr_followup;
+    const missABI = needsFollowup && r.abi_1yr == null;
+    const noFollowup = r.total_followups === 0 && r.days_since_procedure > 30;
+    return { miss1yr, missABI, noFollowup, anyMissing: miss1yr || missABI || noFollowup };
+  }
+  const missingRows = allRows.filter(r => missingKey(r).anyMissing);
+
+  // ── CSV export ────────────────────────────────────────────────────────────
+  function exportCSV() {
+    const tteA_pp = buildTTEData(rowsA, 'primary_patency_loss_date');
+    const tteA_amp = buildTTEData(rowsA, 'major_amputation_date');
+    const tteA_death = buildTTEData(rowsA, 'death_date_fu');
+    const tteB_pp = rowsB ? buildTTEData(rowsB, 'primary_patency_loss_date') : [];
+    const tteB_amp = rowsB ? buildTTEData(rowsB, 'major_amputation_date') : [];
+    const tteB_death = rowsB ? buildTTEData(rowsB, 'death_date_fu') : [];
+
+    const header = 'Patient_ID,MRN,Patient_Name,Procedure_ID,Procedure_Type,Procedure_Date,Group,' +
+      'Death_30Day,MI_30Day,Stroke_30Day,AKI_30Day,Major_Bleeding,Reoperation,Technical_Success,' +
+      'Primary_Patency_Days,Primary_Patency_Status,' +
+      'Secondary_Patency_Days,Secondary_Patency_Status,' +
+      'Major_Amputation_Days,Major_Amputation_Status,' +
+      'Death_Days,Death_Status,Last_Followup_Date,Has_1Yr_Followup,ABI_1Yr';
+
+    function toTTERow(rows, key) {
+      return rows.map(r => {
+        const tte = buildTTEData([r], key)[0];
+        return tte ? `${tte.time},${tte.status}` : ',';
+      });
+    }
+
+    const buildRows = (rows, label) => rows.map((r, i) => {
+      const pp = buildTTEData([r], 'primary_patency_loss_date')[0];
+      const sp = buildTTEData([r], 'secondary_patency_loss_date')[0];
+      const amp = buildTTEData([r], 'major_amputation_date')[0];
+      const death = buildTTEData([r], 'death_date_fu')[0];
+      return [
+        r.patient_id, r.mrn, `"${r.patient_name}"`, r.procedure_id, `"${r.procedure_type}"`,
+        r.procedure_date, label,
+        r.death_30_day||0, r.mi||0, r.stroke||0, r.aki||0, r.major_bleeding||0,
+        r.reoperation||0, r.technical_success||1,
+        pp ? `${pp.time},${pp.status}` : ',',
+        sp ? `${sp.time},${sp.status}` : ',',
+        amp ? `${amp.time},${amp.status}` : ',',
+        death ? `${death.time},${death.status}` : ',',
+        r.last_followup_date||'', r.has_1yr_followup||0, r.abi_1yr ?? ''
+      ].join(',');
+    });
+
+    const csv = [header,
+      ...buildRows(rowsA, twoGroup ? groupALabel : 'Overall'),
+      ...(rowsB ? buildRows(rowsB, groupBLabel) : [])
+    ].join('\n');
+
+    window.electronAPI.saveFile(csv, 'Table2_outcomes_R_ready.csv',
+      [{ name: 'CSV Files', extensions: ['csv'] }]);
+  }
+
+  const pFmt = (res) => res ? formatP(res.p) : '—';
+  const pClr = (res) => res ? pColor(res.p) : '#64748b';
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div>
+          <span style={{ fontWeight: 700, color: '#e2e8f0' }}>
+            Table 2 — Perioperative & Longitudinal Outcomes
+            {twoGroup ? ` (${groupALabel} vs ${groupBLabel})` : ` (n=${nA} procedures)`}
+          </span>
+          {missingRows.length > 0 && (
+            <span style={{ marginLeft: 12, fontSize: 12, color: '#f59e0b', cursor: 'pointer',
+              textDecoration: 'underline' }}
+              onClick={() => setShowMissMap(m => !m)}>
+              ⚠ {missingRows.length} procedures missing 1-year data
+            </span>
+          )}
+        </div>
+        <div className="btn-group">
+          <button className="btn btn-secondary" onClick={exportCSV}>⬇ Export R-ready CSV</button>
+        </div>
+      </div>
+
+      {/* 30-Day Outcomes */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <div className="card-title">30-Day Perioperative Outcomes</div>
+          {twoGroup && (
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              OR = Odds Ratio (Group B vs Group A) · 95% CI · Wald p-value
+            </span>
+          )}
+        </div>
+        <div className="table-container">
+          <table className="data-table" style={{ fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ width: '34%' }}>Outcome</th>
+                <th>{twoGroup ? groupALabel : 'Overall'}<br />
+                  <span style={{ fontSize: 11, color: '#64748b', fontWeight: 400 }}>n = {nA}</span>
+                </th>
+                {twoGroup && (
+                  <>
+                    <th>{groupBLabel}<br />
+                      <span style={{ fontSize: 11, color: '#64748b', fontWeight: 400 }}>n = {nB}</span>
+                    </th>
+                    <th>OR (95% CI)</th>
+                    <th>p-value</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rows30.map(row => {
+                const danger = !row.invertColor && row.cA?.events > 0;
+                const pRes = row.or;
+                return (
+                  <tr key={row.key}>
+                    <td style={{ fontWeight: row.key === 'mace' ? 700 : 400 }}>{row.label}</td>
+                    <td style={{ color: danger ? '#fca5a5' : '#e2e8f0', fontFamily: 'monospace' }}>
+                      {row.cA ? `${row.cA.events}/${row.cA.n} (${row.cA.pct}%)` : '—'}
+                    </td>
+                    {twoGroup && (
+                      <>
+                        <td style={{ color: !row.invertColor && row.cB?.events > 0 ? '#fca5a5' : '#e2e8f0', fontFamily: 'monospace' }}>
+                          {row.cB ? `${row.cB.events}/${row.cB.n} (${row.cB.pct}%)` : '—'}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{fmtCI(pRes)}</td>
+                        <td style={{ fontWeight: 700, color: pClr(pRes), fontFamily: 'monospace' }}>
+                          {pFmt(pRes)}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '6px 16px', fontSize: 11, color: '#475569', borderTop: '1px solid #1e293b' }}>
+          MACE = Major Adverse Cardiovascular Event (Death OR MI OR Stroke) ·
+          AKI = Acute Kidney Injury (renal failure or dialysis required) ·
+          {twoGroup ? ' OR with Haldane-Anscombe correction for zero cells' : ''}
+        </div>
+      </div>
+
+      {/* Time-to-Event */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <div className="card-title">Longitudinal Outcomes (Time-to-Event)</div>
+          {twoGroup && (
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              Log-Rank p · HR = Hazard Ratio (Group B vs A) · Cox PH Breslow
+            </span>
+          )}
+        </div>
+        <div className="table-container">
+          <table className="data-table" style={{ fontSize: 13 }}>
+            <thead>
+              <tr>
+                <th style={{ width: '22%' }}>Outcome</th>
+                <th>Events A</th>
+                <th>Median (days)</th>
+                {twoGroup && (
+                  <>
+                    <th>Events B</th>
+                    <th>Median B (days)</th>
+                    <th>Log-Rank p</th>
+                    <th>HR (95% CI)</th>
+                    <th>HR p</th>
+                  </>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {rowsTTE.map(row => {
+                const pLR = row.lr;
+                const pCox = row.cox;
+                return (
+                  <tr key={row.key}>
+                    <td style={{ fontWeight: 600 }}>{row.label}</td>
+                    <td style={{ fontFamily: 'monospace' }}>
+                      {row.eventsA}/{row.tteA.length}
+                      <span style={{ fontSize: 11, color: '#64748b' }}>
+                        {' '}({row.tteA.length ? ((row.eventsA / row.tteA.length) * 100).toFixed(1) : 0}%)
+                      </span>
+                    </td>
+                    <td style={{ fontFamily: 'monospace' }}>
+                      {row.medA != null ? `${row.medA}d` : 'NR'}
+                    </td>
+                    {twoGroup && (
+                      <>
+                        <td style={{ fontFamily: 'monospace' }}>
+                          {row.eventsB}/{row.tteB?.length ?? 0}
+                          <span style={{ fontSize: 11, color: '#64748b' }}>
+                            {' '}({row.tteB?.length ? ((row.eventsB / row.tteB.length) * 100).toFixed(1) : 0}%)
+                          </span>
+                        </td>
+                        <td style={{ fontFamily: 'monospace' }}>
+                          {row.medB != null ? `${row.medB}d` : 'NR'}
+                        </td>
+                        <td style={{ fontWeight: 700, color: pClr(pLR), fontFamily: 'monospace' }}>
+                          {pFmt(pLR)}
+                        </td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{fmtCI(pCox)}</td>
+                        <td style={{ fontWeight: 700, color: pClr(pCox), fontFamily: 'monospace' }}>
+                          {pFmt(pCox)}
+                        </td>
+                      </>
+                    )}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ padding: '6px 16px', fontSize: 11, color: '#475569', borderTop: '1px solid #1e293b' }}>
+          NR = Not Reached (median survival not crossed 50% threshold) ·
+          Log-Rank: Mantel-Cox χ² test · HR: univariate Cox PH (Breslow) ·
+          Primary patency loss = reintervention or graft occlusion ·
+          Limb salvage loss = major amputation (BKA/AKA)
+        </div>
+      </div>
+
+      {/* Missingness Map */}
+      {(showMissMap || missingRows.length > 0) && (
+        <div className="card" style={{ marginBottom: 16, borderLeft: '3px solid #f59e0b' }}>
+          <div className="card-header" style={{ cursor: 'pointer' }} onClick={() => setShowMissMap(m => !m)}>
+            <div className="card-title" style={{ color: '#f59e0b' }}>
+              ⚠ Missingness Map ({missingRows.length} procedures with incomplete follow-up)
+            </div>
+            <span style={{ fontSize: 12, color: '#64748b' }}>{showMissMap ? '▲ Collapse' : '▼ Expand'}</span>
+          </div>
+          {showMissMap && (
+            <>
+              <div style={{ padding: '8px 16px', fontSize: 12, color: '#f59e0b', background: '#1c1400' }}>
+                Highlighted rows are missing critical 1-year follow-up data. Patients highlighted in yellow
+                should be contacted before submitting for publication. Missing ABI at 1 year indicates
+                incomplete patency assessment.
+              </div>
+              <div className="table-container">
+                <table className="data-table" style={{ fontSize: 12 }}>
+                  <thead>
+                    <tr>
+                      <th>Patient</th><th>MRN</th><th>Procedure</th><th>Date</th>
+                      <th>Days Since</th><th>Total F/U</th><th>1-Yr F/U</th><th>ABI @ 1yr</th><th>Issues</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {missingRows.map(r => {
+                      const m = missingKey(r);
+                      return (
+                        <tr key={r.procedure_id} style={{ background: '#2d2200' }}>
+                          <td style={{ color: '#fde047' }}>{r.patient_name}</td>
+                          <td><span className="badge badge-secondary">{r.mrn}</span></td>
+                          <td>{r.procedure_type}</td>
+                          <td>{r.procedure_date}</td>
+                          <td style={{ fontFamily: 'monospace' }}>{r.days_since_procedure}d</td>
+                          <td style={{ fontFamily: 'monospace' }}>{r.total_followups}</td>
+                          <td>
+                            {r.has_1yr_followup
+                              ? <span className="badge badge-success">Yes</span>
+                              : <span style={{ color: '#ef4444', fontWeight: 700 }}>Missing</span>}
+                          </td>
+                          <td>
+                            {r.abi_1yr != null
+                              ? <span style={{ color: '#10b981' }}>{r.abi_1yr}</span>
+                              : <span style={{ color: '#ef4444', fontWeight: 700 }}>Missing</span>}
+                          </td>
+                          <td style={{ fontSize: 11 }}>
+                            {[m.miss1yr && '❌ No 1-yr F/U', m.missABI && '❌ No ABI',
+                              m.noFollowup && '❌ No follow-ups at all'].filter(Boolean).join(' · ')}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Export note */}
+      <div style={{ padding: '8px 12px', background: '#0f172a', borderRadius: 6, fontSize: 12, color: '#64748b' }}>
+        <strong style={{ color: '#60a5fa' }}>R import:</strong>{' '}
+        <code style={{ color: '#a78bfa' }}>df &lt;- read.csv("Table2_outcomes_R_ready.csv")</code>
+        {' · '}
+        <code style={{ color: '#a78bfa' }}>survfit(Surv(Primary_Patency_Days, Primary_Patency_Status) ~ Group, data=df)</code>
+        {' · '}
+        Compatible with <strong style={{ color: '#e2e8f0' }}>GraphPad Prism</strong> (survival analysis → import CSV).
       </div>
     </div>
   );

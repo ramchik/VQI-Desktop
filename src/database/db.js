@@ -907,6 +907,62 @@ function getTimeToEvent(patientIds) {
   `).all(...patientIds);
 }
 
+// ─── TABLE 2 RAW DATA (30-day outcomes + time-to-event) ──────────────────────
+
+function getTable2RawData(patientIds) {
+  if (!patientIds || patientIds.length === 0) return [];
+  const placeholders = patientIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT
+      pr.procedure_id, pr.procedure_date, pr.procedure_type,
+      p.patient_id, p.mrn, p.first_name || ' ' || p.last_name AS patient_name,
+      -- 30-day outcomes
+      COALESCE(po.stroke, 0)                          AS stroke,
+      COALESCE(po.myocardial_infarction, 0)           AS mi,
+      COALESCE(po.death_30_day, 0)                    AS death_30_day,
+      COALESCE(po.death_in_hospital, 0)               AS death_in_hospital,
+      COALESCE(po.renal_failure, 0)                   AS renal_failure,
+      COALESCE(po.dialysis_required, 0)               AS dialysis_required,
+      COALESCE(po.bleeding_requiring_transfusion, 0)  AS major_bleeding,
+      COALESCE(po.reoperation, 0)                     AS reoperation,
+      COALESCE(po.amputation, 0)                      AS amputation_30d,
+      COALESCE(io.technical_success, 1)               AS technical_success,
+      -- Composite 30-day
+      CASE WHEN po.renal_failure=1 OR po.dialysis_required=1 THEN 1 ELSE 0 END AS aki,
+      CASE WHEN po.death_30_day=1 OR po.myocardial_infarction=1 OR po.stroke=1 THEN 1 ELSE 0 END AS mace,
+      -- Time-to-event dates (from follow-up records)
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id
+         AND (f.reintervention = 1 OR (f.graft_patency IS NOT NULL AND f.graft_patency < 1)))
+        AS primary_patency_loss_date,
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id AND f.graft_patency = 0)
+        AS secondary_patency_loss_date,
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id AND f.amputation = 1
+         AND f.amputation_level IN ('Below Knee','Above Knee'))
+        AS major_amputation_date,
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id AND f.alive = 0)
+        AS death_date_fu,
+      (SELECT MAX(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id)
+        AS last_followup_date,
+      -- Missingness flags
+      (SELECT COUNT(*) FROM followup f WHERE f.procedure_id = pr.procedure_id
+         AND f.followup_interval = '1 Year') AS has_1yr_followup,
+      (SELECT f.abi FROM followup f WHERE f.procedure_id = pr.procedure_id
+         AND f.followup_interval = '1 Year' LIMIT 1) AS abi_1yr,
+      (SELECT COUNT(*) FROM followup f WHERE f.procedure_id = pr.procedure_id) AS total_followups,
+      CAST(julianday('now') - julianday(pr.procedure_date) AS INTEGER) AS days_since_procedure
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    LEFT JOIN intraoperative io ON io.procedure_id = pr.procedure_id
+    WHERE p.patient_id IN (${placeholders})
+    ORDER BY pr.procedure_date DESC
+  `).all(...patientIds);
+}
+
 // ─── DEVICES ─────────────────────────────────────────────────────────────────
 
 function getDevices(procedureId) {
@@ -983,7 +1039,7 @@ module.exports = {
   exportPatientData, exportProcedureData, backupDatabase,
   upsertIntraoperative, upsertPostoperative, upsertModule,
   getPatientRawData,
-  getRedFlags, getCohort, getTable1Stats, getTimeToEvent,
+  getRedFlags, getCohort, getTable1Stats, getTimeToEvent, getTable2RawData,
   getDevices, createDevice, updateDevice, deleteDevice,
   getPhotos, createPhoto, deletePhoto,
   upsertVenousModule

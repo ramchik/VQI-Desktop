@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getCohort: (filters) => ipcRenderer.invoke('research:getCohort', filters),
   getTable1Stats: (patientIds) => ipcRenderer.invoke('research:getTable1', patientIds),
   getTimeToEvent: (patientIds) => ipcRenderer.invoke('research:getTimeToEvent', patientIds),
+  getTable2Data: (patientIds) => ipcRenderer.invoke('research:getTable2', patientIds),
 
   // Devices
   getDevices: (procedureId) => ipcRenderer.invoke('devices:getByProcedure', procedureId),

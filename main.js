@@ -260,6 +260,11 @@ ipcMain.handle('research:getTimeToEvent', async (_, patientIds) => {
   catch (e) { return { success: false, error: e.message }; }
 });
 
+ipcMain.handle('research:getTable2', async (_, patientIds) => {
+  try { return { success: true, data: dbModule().getTable2RawData(patientIds || []) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
 // Devices
 ipcMain.handle('devices:getByProcedure', async (_, procedureId) => {
   try { return { success: true, data: dbModule().getDevices(procedureId) }; }
