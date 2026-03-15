@@ -216,11 +216,12 @@ function getProcedureById(procedureId) {
   proc.evar_module = db.prepare('SELECT * FROM evar_module WHERE procedure_id = ?').get(procedureId);
   proc.carotid_module = db.prepare('SELECT * FROM carotid_module WHERE procedure_id = ?').get(procedureId);
   proc.pad_module = db.prepare('SELECT * FROM pad_module WHERE procedure_id = ?').get(procedureId);
+  proc.venous_module = db.prepare('SELECT * FROM venous_module WHERE procedure_id = ?').get(procedureId);
   return proc;
 }
 
 function createProcedure(data) {
-  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, ...procData } = data;
+  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, venous_module, ...procData } = data;
   const stmt = db.prepare(`
     INSERT INTO procedures (patient_id, procedure_type, procedure_date, surgeon_id, assistant,
       hospital, urgency, anesthesia_type, indication, symptom_status, admission_type,
@@ -241,12 +242,13 @@ function createProcedure(data) {
   if (evar_module) upsertModule('evar_module', 'evar_id', procedureId, evar_module);
   if (carotid_module) upsertModule('carotid_module', 'carotid_id', procedureId, carotid_module);
   if (pad_module) upsertModule('pad_module', 'pad_id', procedureId, pad_module);
+  if (venous_module) upsertVenousModule(procedureId, venous_module);
 
   return { procedure_id: procedureId };
 }
 
 function updateProcedure(procedureId, data) {
-  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, ...procData } = data;
+  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, venous_module, ...procData } = data;
   if (Object.keys(procData).length > 0) {
     const fields = Object.keys(procData).map(k => `${k} = @${k}`).join(', ');
     db.prepare(`UPDATE procedures SET ${fields}, updated_at = datetime('now') WHERE procedure_id = @procedure_id`)
@@ -257,6 +259,7 @@ function updateProcedure(procedureId, data) {
   if (evar_module) upsertModule('evar_module', 'evar_id', procedureId, evar_module);
   if (carotid_module) upsertModule('carotid_module', 'carotid_id', procedureId, carotid_module);
   if (pad_module) upsertModule('pad_module', 'pad_id', procedureId, pad_module);
+  if (venous_module) upsertVenousModule(procedureId, venous_module);
   return { success: true };
 }
 
@@ -645,6 +648,386 @@ function backupDatabase(destPath) {
   });
 }
 
+// ─── TABLE 1 RAW DATA (for frontend statistical tests) ───────────────────────
+
+function getPatientRawData(patientIds) {
+  if (!patientIds || patientIds.length === 0) return [];
+  const placeholders = patientIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT
+      p.patient_id, p.date_of_birth, p.sex, p.race, p.ethnicity,
+      p.bmi, p.height_cm, p.weight_kg,
+      c.hypertension, c.diabetes, c.diabetes_type, c.hba1c, c.hyperlipidemia,
+      c.coronary_artery_disease, c.prior_mi, c.prior_cabg, c.prior_pci,
+      c.heart_failure, c.nyha_class, c.copd, c.home_oxygen,
+      c.ckd_stage, c.dialysis, c.atrial_fibrillation,
+      c.prior_stroke, c.prior_tia, c.peripheral_artery_disease,
+      c.claudication_history, c.prior_amputation, c.carotid_disease,
+      c.family_history_aneurysm, c.frailty_score,
+      c.smoking_status, c.pack_years, c.functional_status, c.ambulatory_status,
+      m.aspirin, m.clopidogrel, m.ticagrelor, m.warfarin,
+      m.apixaban, m.rivaroxaban, m.statin, m.beta_blocker,
+      m.ace_inhibitor, m.arb, m.insulin, m.oral_diabetic_medications,
+      -- Pre-op labs from most recent procedure
+      (SELECT pr2.hemoglobin FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS hemoglobin,
+      (SELECT pr2.baseline_creatinine FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS creatinine,
+      (SELECT pr2.platelet_count FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS platelet_count,
+      (SELECT pr2.procedure_type FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id
+       ORDER BY pr2.procedure_date DESC LIMIT 1) AS last_procedure_type,
+      (SELECT COUNT(*) FROM procedures pr2
+       WHERE pr2.patient_id = p.patient_id) AS procedure_count
+    FROM patients p
+    LEFT JOIN comorbidities c ON c.patient_id = p.patient_id
+    LEFT JOIN medications m ON m.patient_id = p.patient_id
+    WHERE p.patient_id IN (${placeholders})
+    ORDER BY p.last_name, p.first_name
+  `).all(...patientIds);
+}
+
+// ─── RED-FLAG ALERTS ─────────────────────────────────────────────────────────
+
+function getRedFlags() {
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Procedures with stroke or in-hospital death (last 90 days)
+  const strokeDeath = db.prepare(`
+    SELECT pr.procedure_id, pr.procedure_date, pr.procedure_type,
+      p.patient_id, p.first_name || ' ' || p.last_name AS patient_name, p.mrn,
+      po.stroke, po.death_in_hospital, po.death_30_day,
+      po.amputation, po.reoperation
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    WHERE pr.procedure_date >= date('now', '-90 days')
+      AND (po.stroke = 1 OR po.death_in_hospital = 1 OR po.death_30_day = 1
+           OR po.amputation = 1 OR po.reoperation = 1)
+    ORDER BY pr.procedure_date DESC
+  `).all();
+
+  // Missed 30-day follow-ups: followup_scheduled=1, followup_date < today, no followup record
+  const missedFollowups = db.prepare(`
+    SELECT pr.procedure_id, pr.procedure_date, pr.procedure_type,
+      p.patient_id, p.first_name || ' ' || p.last_name AS patient_name, p.mrn,
+      po.followup_date
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    WHERE po.followup_scheduled = 1
+      AND po.followup_date IS NOT NULL
+      AND po.followup_date < ?
+      AND NOT EXISTS (SELECT 1 FROM followup f WHERE f.procedure_id = pr.procedure_id)
+    ORDER BY po.followup_date ASC
+    LIMIT 20
+  `).all(today);
+
+  // Carotid procedures with periop stroke
+  const carotidStrokes = db.prepare(`
+    SELECT pr.procedure_id, pr.procedure_date,
+      p.patient_id, p.first_name || ' ' || p.last_name AS patient_name, p.mrn,
+      cm.periop_stroke, cm.periop_stroke_side
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    JOIN carotid_module cm ON cm.procedure_id = pr.procedure_id
+    WHERE pr.procedure_date >= date('now', '-90 days')
+      AND cm.periop_stroke = 1
+    ORDER BY pr.procedure_date DESC
+  `).all();
+
+  return { strokeDeath, missedFollowups, carotidStrokes };
+}
+
+// ─── RESEARCH / COHORT ENGINE ─────────────────────────────────────────────────
+
+function getCohort(filters = {}) {
+  let query = `
+    SELECT DISTINCT p.patient_id, p.mrn, p.first_name, p.last_name,
+      p.date_of_birth, p.sex, p.race,
+      c.hypertension, c.diabetes, c.coronary_artery_disease, c.copd,
+      c.heart_failure, c.prior_stroke, c.ckd_stage, c.dialysis,
+      c.smoking_status, c.peripheral_artery_disease,
+      c.functional_status, c.frailty_score,
+      (SELECT COUNT(*) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS procedure_count,
+      (SELECT MAX(pr.procedure_date) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS last_procedure_date
+    FROM patients p
+    LEFT JOIN comorbidities c ON c.patient_id = p.patient_id
+    LEFT JOIN procedures pr ON pr.patient_id = p.patient_id
+    WHERE 1=1
+  `;
+  const params = [];
+
+  if (filters.sex) { query += ` AND p.sex = ?`; params.push(filters.sex); }
+  if (filters.minAge) {
+    query += ` AND (strftime('%Y','now') - strftime('%Y', p.date_of_birth)) >= ?`;
+    params.push(Number(filters.minAge));
+  }
+  if (filters.maxAge) {
+    query += ` AND (strftime('%Y','now') - strftime('%Y', p.date_of_birth)) <= ?`;
+    params.push(Number(filters.maxAge));
+  }
+  if (filters.diabetes == 1) { query += ` AND c.diabetes = 1`; }
+  if (filters.hypertension == 1) { query += ` AND c.hypertension = 1`; }
+  if (filters.copd == 1) { query += ` AND c.copd = 1`; }
+  if (filters.heart_failure == 1) { query += ` AND c.heart_failure = 1`; }
+  if (filters.dialysis == 1) { query += ` AND c.dialysis = 1`; }
+  if (filters.prior_stroke == 1) { query += ` AND c.prior_stroke = 1`; }
+  if (filters.smoking) { query += ` AND c.smoking_status = ?`; params.push(filters.smoking); }
+  if (filters.procedure_type) {
+    query += ` AND EXISTS (SELECT 1 FROM procedures pp WHERE pp.patient_id = p.patient_id AND pp.procedure_type = ?)`;
+    params.push(filters.procedure_type);
+  }
+  if (filters.procedure_date_from) {
+    query += ` AND pr.procedure_date >= ?`; params.push(filters.procedure_date_from);
+  }
+  if (filters.procedure_date_to) {
+    query += ` AND pr.procedure_date <= ?`; params.push(filters.procedure_date_to);
+  }
+  if (filters.surgeon_id) {
+    query += ` AND pr.surgeon_id = ?`; params.push(filters.surgeon_id);
+  }
+
+  query += ` ORDER BY p.last_name, p.first_name`;
+  return db.prepare(query).all(...params);
+}
+
+function getTable1Stats(patientIds) {
+  if (!patientIds || patientIds.length === 0) return {};
+
+  const placeholders = patientIds.map(() => '?').join(',');
+  const patients = db.prepare(`
+    SELECT p.date_of_birth, p.sex, p.race, p.bmi, p.height_cm, p.weight_kg,
+      c.hypertension, c.diabetes, c.hyperlipidemia, c.coronary_artery_disease,
+      c.copd, c.heart_failure, c.prior_stroke, c.prior_tia, c.ckd_stage,
+      c.dialysis, c.atrial_fibrillation, c.smoking_status,
+      c.peripheral_artery_disease, c.prior_amputation, c.hba1c, c.frailty_score,
+      m.aspirin, m.clopidogrel, m.statin, m.beta_blocker, m.ace_inhibitor,
+      m.warfarin, m.apixaban
+    FROM patients p
+    LEFT JOIN comorbidities c ON c.patient_id = p.patient_id
+    LEFT JOIN medications m ON m.patient_id = p.patient_id
+    WHERE p.patient_id IN (${placeholders})
+  `).all(...patientIds);
+
+  const n = patients.length;
+  if (n === 0) return { n: 0 };
+
+  function calcAge(dob) {
+    if (!dob) return null;
+    const today = new Date();
+    const birth = new Date(dob);
+    return today.getFullYear() - birth.getFullYear() -
+      (today < new Date(today.getFullYear(), birth.getMonth(), birth.getDate()) ? 1 : 0);
+  }
+  function stats(values) {
+    const v = values.filter(x => x != null && !isNaN(x));
+    if (v.length === 0) return { mean: null, sd: null, median: null, iqr: null, n: 0 };
+    const mean = v.reduce((a, b) => a + b, 0) / v.length;
+    const sd = Math.sqrt(v.reduce((a, b) => a + (b - mean) ** 2, 0) / v.length);
+    const sorted = [...v].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+    const q1 = sorted[Math.floor(sorted.length * 0.25)];
+    const q3 = sorted[Math.floor(sorted.length * 0.75)];
+    return { mean: +mean.toFixed(1), sd: +sd.toFixed(1), median: +median.toFixed(1), iqr: [+q1?.toFixed(1), +q3?.toFixed(1)], n: v.length };
+  }
+  function pct(field, val = 1) {
+    const cnt = patients.filter(p => p[field] === val).length;
+    return { n: cnt, pct: +((cnt / n) * 100).toFixed(1) };
+  }
+  function catCount(field) {
+    const map = {};
+    patients.forEach(p => { const v = p[field]; if (v != null) map[v] = (map[v] || 0) + 1; });
+    return Object.fromEntries(Object.entries(map).map(([k, v]) => [k, { n: v, pct: +((v / n) * 100).toFixed(1) }]));
+  }
+
+  return {
+    n,
+    age: stats(patients.map(p => calcAge(p.date_of_birth))),
+    bmi: stats(patients.map(p => p.bmi)),
+    hba1c: stats(patients.map(p => p.hba1c)),
+    sex: catCount('sex'),
+    race: catCount('race'),
+    smoking: catCount('smoking_status'),
+    ckd: catCount('ckd_stage'),
+    hypertension: pct('hypertension'),
+    diabetes: pct('diabetes'),
+    hyperlipidemia: pct('hyperlipidemia'),
+    cad: pct('coronary_artery_disease'),
+    copd: pct('copd'),
+    heart_failure: pct('heart_failure'),
+    prior_stroke: pct('prior_stroke'),
+    dialysis: pct('dialysis'),
+    afib: pct('atrial_fibrillation'),
+    pad: pct('peripheral_artery_disease'),
+    aspirin: pct('aspirin'),
+    statin: pct('statin'),
+    clopidogrel: pct('clopidogrel'),
+    beta_blocker: pct('beta_blocker'),
+    anticoagulant: { n: patients.filter(p => p.warfarin || p.apixaban).length,
+      pct: +((patients.filter(p => p.warfarin || p.apixaban).length / n) * 100).toFixed(1) }
+  };
+}
+
+function getTimeToEvent(patientIds) {
+  if (!patientIds || patientIds.length === 0) return [];
+  const placeholders = patientIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT pr.procedure_id, pr.procedure_date, pr.procedure_type,
+      p.patient_id, p.first_name || ' ' || p.last_name AS patient_name, p.mrn,
+      po.reoperation, po.death_30_day, po.death_in_hospital, po.amputation,
+      po.discharge_status,
+      (SELECT MIN(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id AND f.reintervention = 1)
+        AS reintervention_date,
+      (SELECT MIN(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id AND f.alive = 0)
+        AS death_date,
+      (SELECT MAX(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id)
+        AS last_followup_date,
+      CAST(julianday(
+        COALESCE(
+          (SELECT MIN(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id AND f.reintervention = 1),
+          (SELECT MAX(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id),
+          date('now')
+        )
+      ) - julianday(pr.procedure_date) AS INTEGER) AS days_to_event,
+      (SELECT CASE WHEN MIN(f.followup_date) IS NOT NULL THEN 1 ELSE 0 END
+       FROM followup f WHERE f.procedure_id = pr.procedure_id AND f.reintervention = 1) AS event_reintervention,
+      (SELECT CASE WHEN MIN(f.followup_date) IS NOT NULL THEN 1 ELSE 0 END
+       FROM followup f WHERE f.procedure_id = pr.procedure_id AND f.alive = 0) AS event_death
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    WHERE p.patient_id IN (${placeholders})
+    ORDER BY pr.procedure_date DESC
+  `).all(...patientIds);
+}
+
+// ─── TABLE 2 RAW DATA (30-day outcomes + time-to-event) ──────────────────────
+
+function getTable2RawData(patientIds) {
+  if (!patientIds || patientIds.length === 0) return [];
+  const placeholders = patientIds.map(() => '?').join(',');
+  return db.prepare(`
+    SELECT
+      pr.procedure_id, pr.procedure_date, pr.procedure_type,
+      p.patient_id, p.mrn, p.first_name || ' ' || p.last_name AS patient_name,
+      -- 30-day outcomes
+      COALESCE(po.stroke, 0)                          AS stroke,
+      COALESCE(po.myocardial_infarction, 0)           AS mi,
+      COALESCE(po.death_30_day, 0)                    AS death_30_day,
+      COALESCE(po.death_in_hospital, 0)               AS death_in_hospital,
+      COALESCE(po.renal_failure, 0)                   AS renal_failure,
+      COALESCE(po.dialysis_required, 0)               AS dialysis_required,
+      COALESCE(po.bleeding_requiring_transfusion, 0)  AS major_bleeding,
+      COALESCE(po.reoperation, 0)                     AS reoperation,
+      COALESCE(po.amputation, 0)                      AS amputation_30d,
+      COALESCE(io.technical_success, 1)               AS technical_success,
+      -- Composite 30-day
+      CASE WHEN po.renal_failure=1 OR po.dialysis_required=1 THEN 1 ELSE 0 END AS aki,
+      CASE WHEN po.death_30_day=1 OR po.myocardial_infarction=1 OR po.stroke=1 THEN 1 ELSE 0 END AS mace,
+      -- Time-to-event dates (from follow-up records)
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id
+         AND (f.reintervention = 1 OR (f.graft_patency IS NOT NULL AND f.graft_patency < 1)))
+        AS primary_patency_loss_date,
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id AND f.graft_patency = 0)
+        AS secondary_patency_loss_date,
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id AND f.amputation = 1
+         AND f.amputation_level IN ('Below Knee','Above Knee'))
+        AS major_amputation_date,
+      (SELECT MIN(f.followup_date) FROM followup f
+       WHERE f.procedure_id = pr.procedure_id AND f.alive = 0)
+        AS death_date_fu,
+      (SELECT MAX(f.followup_date) FROM followup f WHERE f.procedure_id = pr.procedure_id)
+        AS last_followup_date,
+      -- Missingness flags
+      (SELECT COUNT(*) FROM followup f WHERE f.procedure_id = pr.procedure_id
+         AND f.followup_interval = '1 Year') AS has_1yr_followup,
+      (SELECT f.abi FROM followup f WHERE f.procedure_id = pr.procedure_id
+         AND f.followup_interval = '1 Year' LIMIT 1) AS abi_1yr,
+      (SELECT COUNT(*) FROM followup f WHERE f.procedure_id = pr.procedure_id) AS total_followups,
+      CAST(julianday('now') - julianday(pr.procedure_date) AS INTEGER) AS days_since_procedure
+    FROM procedures pr
+    JOIN patients p ON pr.patient_id = p.patient_id
+    LEFT JOIN postoperative po ON po.procedure_id = pr.procedure_id
+    LEFT JOIN intraoperative io ON io.procedure_id = pr.procedure_id
+    WHERE p.patient_id IN (${placeholders})
+    ORDER BY pr.procedure_date DESC
+  `).all(...patientIds);
+}
+
+// ─── DEVICES ─────────────────────────────────────────────────────────────────
+
+function getDevices(procedureId) {
+  return db.prepare('SELECT * FROM devices WHERE procedure_id = ? ORDER BY created_at').all(procedureId);
+}
+
+function createDevice(data) {
+  const stmt = db.prepare(`
+    INSERT INTO devices (procedure_id, device_name, manufacturer, model, size_description,
+      lot_number, serial_number, ref_number, expiry_date, implanted, notes)
+    VALUES (@procedure_id, @device_name, @manufacturer, @model, @size_description,
+      @lot_number, @serial_number, @ref_number, @expiry_date, @implanted, @notes)
+  `);
+  const result = stmt.run(data);
+  return { device_id: result.lastInsertRowid, ...data };
+}
+
+function updateDevice(deviceId, data) {
+  const fields = Object.keys(data).filter(k => k !== 'device_id').map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE devices SET ${fields} WHERE device_id = @device_id`).run({ ...data, device_id: deviceId });
+  return { device_id: deviceId, ...data };
+}
+
+function deleteDevice(deviceId) {
+  db.prepare('DELETE FROM devices WHERE device_id = ?').run(deviceId);
+  return { deleted: true };
+}
+
+// ─── PHOTOS ──────────────────────────────────────────────────────────────────
+
+function getPhotos(procedureId) {
+  return db.prepare('SELECT * FROM procedure_photos WHERE procedure_id = ? ORDER BY taken_date DESC, created_at DESC').all(procedureId);
+}
+
+function createPhoto(data) {
+  const stmt = db.prepare(`
+    INSERT INTO procedure_photos (procedure_id, patient_id, file_path, file_name,
+      taken_date, anatomical_location, photo_type, wifi_wound, wifi_ischemia, wifi_infection, notes)
+    VALUES (@procedure_id, @patient_id, @file_path, @file_name,
+      @taken_date, @anatomical_location, @photo_type, @wifi_wound, @wifi_ischemia, @wifi_infection, @notes)
+  `);
+  const result = stmt.run(data);
+  return { photo_id: result.lastInsertRowid, ...data };
+}
+
+function deletePhoto(photoId) {
+  const photo = db.prepare('SELECT file_path FROM procedure_photos WHERE photo_id = ?').get(photoId);
+  db.prepare('DELETE FROM procedure_photos WHERE photo_id = ?').run(photoId);
+  return { deleted: true, file_path: photo?.file_path };
+}
+
+// ─── VENOUS MODULE ────────────────────────────────────────────────────────────
+
+function upsertVenousModule(procedureId, data) {
+  const existing = db.prepare('SELECT venous_id FROM venous_module WHERE procedure_id = ?').get(procedureId);
+  if (existing) {
+    const fields = Object.keys(data).filter(k => k !== 'procedure_id').map(k => `${k} = @${k}`).join(', ');
+    db.prepare(`UPDATE venous_module SET ${fields} WHERE procedure_id = @procedure_id`).run({ ...data, procedure_id: procedureId });
+  } else {
+    const cols = ['procedure_id', ...Object.keys(data).filter(k => k !== 'procedure_id')];
+    const vals = cols.map(k => `@${k}`).join(', ');
+    db.prepare(`INSERT INTO venous_module (${cols.join(', ')}) VALUES (${vals})`).run({ ...data, procedure_id: procedureId });
+  }
+}
+
 module.exports = {
   initDatabase, loginUser,
   getPatients, getPatientById, createPatient, updatePatient, deletePatient,
@@ -654,5 +1037,10 @@ module.exports = {
   getUsers, createUser, updateUser, deleteUser,
   getDashboardStats, getReportData,
   exportPatientData, exportProcedureData, backupDatabase,
-  upsertIntraoperative, upsertPostoperative, upsertModule
+  upsertIntraoperative, upsertPostoperative, upsertModule,
+  getPatientRawData,
+  getRedFlags, getCohort, getTable1Stats, getTimeToEvent, getTable2RawData,
+  getDevices, createDevice, updateDevice, deleteDevice,
+  getPhotos, createPhoto, deletePhoto,
+  upsertVenousModule
 };

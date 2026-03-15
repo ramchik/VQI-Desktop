@@ -329,7 +329,44 @@ function ComorbiditiesTab({ data, setData }) {
     </label>
   );
 
+  // Modified Frailty Index – 5 (mFI-5)
+  const mfi5 = (data.diabetes ? 1 : 0) + (data.copd ? 1 : 0) + (data.heart_failure ? 1 : 0) +
+    (data.hypertension ? 1 : 0) +
+    (data.functional_status && data.functional_status !== 'Independent' ? 1 : 0);
+  const mfiColor = mfi5 >= 3 ? '#ef4444' : mfi5 >= 2 ? '#f59e0b' : '#10b981';
+  const mfiRisk = mfi5 >= 3 ? 'High Risk' : mfi5 >= 2 ? 'Intermediate' : 'Low Risk';
+
   return (
+    <div>
+      {/* mFI-5 Banner */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, background: '#1e293b', border: `1px solid ${mfiColor}44`, borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
+        <div style={{ textAlign: 'center', minWidth: 80 }}>
+          <div style={{ fontSize: 32, fontWeight: 800, color: mfiColor, lineHeight: 1 }}>{mfi5}/5</div>
+          <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>mFI-5 Score</div>
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, color: mfiColor, marginBottom: 2 }}>Modified Frailty Index — {mfiRisk}</div>
+          <div style={{ fontSize: 12, color: '#94a3b8' }}>
+            Components: Diabetes · COPD · Heart Failure · Hypertension · Non-independent functional status
+          </div>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+            mFI-5 ≥3 associated with ↑ postoperative complications, 30-day mortality, and readmission in vascular surgery.
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', maxWidth: 200 }}>
+          {[['DM', data.diabetes], ['COPD', data.copd], ['CHF', data.heart_failure],
+            ['HTN', data.hypertension], ['Non-Indep', data.functional_status && data.functional_status !== 'Independent']
+          ].map(([label, active]) => (
+            <span key={label} style={{
+              fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4,
+              background: active ? mfiColor + '33' : '#1e293b',
+              color: active ? mfiColor : '#475569',
+              border: `1px solid ${active ? mfiColor + '66' : '#334155'}`
+            }}>{label}</span>
+          ))}
+        </div>
+      </div>
+
     <div className="card">
       <div className="card-body">
         <div className="form-grid form-grid-3">
@@ -465,6 +502,7 @@ function ComorbiditiesTab({ data, setData }) {
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

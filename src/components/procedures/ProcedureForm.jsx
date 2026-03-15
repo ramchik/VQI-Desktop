@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../App';
+import WoundPhotos from '../photos/WoundPhotos';
 
 const PROCEDURE_TYPES = [
   'Carotid Endarterectomy',
@@ -17,6 +18,11 @@ const PROCEDURE_TYPES = [
   'Dialysis Access Creation',
   'Dialysis Access Revision',
   'Thrombectomy/Embolectomy',
+  'Varicose Vein Ablation (EVLA/RFA)',
+  'Phlebectomy',
+  'Sclerotherapy',
+  'Venous Stenting',
+  'Deep Venous Reconstruction',
   'Fasciotomy',
   'Other Vascular Procedure'
 ];
@@ -25,6 +31,7 @@ const CAROTID_TYPES = ['Carotid Endarterectomy','Carotid Artery Stenting','TCAR 
 const EVAR_TYPES = ['EVAR (Endovascular Aortic Repair)','TEVAR (Thoracic EVAR)','Open AAA Repair','Open Thoracoabdominal Aortic Repair'];
 const PAD_TYPES = ['Peripheral Bypass','Peripheral Angioplasty/Stenting','Lower Extremity Amputation'];
 const DIALYSIS_TYPES = ['Dialysis Access Creation','Dialysis Access Revision'];
+const VENOUS_TYPES = ['Varicose Vein Ablation (EVLA/RFA)','Phlebectomy','Sclerotherapy','Venous Stenting','Deep Venous Reconstruction'];
 
 const EMPTY_PROC = {
   patient_id: '', procedure_type: '', procedure_date: new Date().toISOString().slice(0,10),
@@ -88,6 +95,15 @@ const EMPTY_PAD = {
   lesion_length_cm: '', tasc_classification: ''
 };
 
+const EMPTY_VENOUS = {
+  ceap_clinical: '', ceap_etiology: '', ceap_anatomy: '', ceap_pathophysiology: '',
+  vcss_pain: 0, vcss_varicose_veins: 0, vcss_venous_edema: 0, vcss_skin_pigmentation: 0,
+  vcss_inflammation: 0, vcss_induration: 0, vcss_ulcer_active: 0,
+  vcss_ulcer_duration: 0, vcss_ulcer_size: 0, vcss_compression_use: 0,
+  vein_treated: '', technique: '', closure_length_cm: '', foam_volume_ml: '',
+  recurrence: 0, notes: ''
+};
+
 export default function ProcedureForm({ procedureId, patientId }) {
   const { navigate, notify } = useApp();
   const [tab, setTab] = useState('procedure');
@@ -98,6 +114,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
   const [evar, setEvar] = useState(EMPTY_EVAR);
   const [carotid, setCarotid] = useState(EMPTY_CAROTID);
   const [pad, setPad] = useState(EMPTY_PAD);
+  const [venous, setVenous] = useState(EMPTY_VENOUS);
   const [loading, setLoading] = useState(!!procedureId);
   const [saving, setSaving] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState(null);
@@ -110,6 +127,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
   const showCarotid = CAROTID_TYPES.includes(procType);
   const showEvar = EVAR_TYPES.includes(procType);
   const showPad = PAD_TYPES.includes(procType);
+  const showVenous = VENOUS_TYPES.includes(procType);
 
   useEffect(() => {
     loadSurgeons();
@@ -140,6 +158,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
       if (d.evar_module) setEvar({ ...EMPTY_EVAR, ...stripNulls(d.evar_module) });
       if (d.carotid_module) setCarotid({ ...EMPTY_CAROTID, ...stripNulls(d.carotid_module) });
       if (d.pad_module) setPad({ ...EMPTY_PAD, ...stripNulls(d.pad_module) });
+      if (d.venous_module) setVenous({ ...EMPTY_VENOUS, ...stripNulls(d.venous_module) });
     }
     setLoading(false);
   }
@@ -193,6 +212,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
         ...(showEvar ? { evar_module: cleanObj(evar) } : {}),
         ...(showCarotid ? { carotid_module: cleanObj(carotid) } : {}),
         ...(showPad ? { pad_module: cleanObj(pad) } : {}),
+        ...(showVenous ? { venous_module: cleanObj(venous) } : {}),
       };
       let res;
       if (isEdit) {
@@ -223,6 +243,8 @@ export default function ProcedureForm({ procedureId, patientId }) {
     ...(showCarotid ? [{ id: 'carotid', label: '🧠 Carotid Module' }] : []),
     ...(showEvar ? [{ id: 'evar', label: '🫀 Aortic Module' }] : []),
     ...(showPad ? [{ id: 'pad', label: '🦵 PAD Module' }] : []),
+    ...(showVenous ? [{ id: 'venous', label: '🩸 Venous Module' }] : []),
+    ...(isEdit ? [{ id: 'devices', label: '🔩 Devices' }, { id: 'photos', label: '📸 Wound Photos' }] : []),
   ];
 
   if (loading) return (
@@ -298,6 +320,9 @@ export default function ProcedureForm({ procedureId, patientId }) {
       {tab === 'carotid' && showCarotid && <CarotidModuleTab data={carotid} setF={setF(setCarotid)} toggle={(f) => toggle(setCarotid, f)} />}
       {tab === 'evar' && showEvar && <EvarModuleTab data={evar} setF={setF(setEvar)} toggle={(f) => toggle(setEvar, f)} procType={procType} />}
       {tab === 'pad' && showPad && <PADModuleTab data={pad} setF={setF(setPad)} toggle={(f) => toggle(setPad, f)} />}
+      {tab === 'venous' && showVenous && <VenousModuleTab data={venous} setF={setF(setVenous)} toggle={(f) => toggle(setVenous, f)} />}
+      {tab === 'devices' && isEdit && <DevicesTab procedureId={procedureId} />}
+      {tab === 'photos' && isEdit && <WoundPhotos procedureId={procedureId} patientId={proc.patient_id || selectedPatient?.patient_id} />}
     </div>
   );
 }
@@ -1253,6 +1278,274 @@ function PADModuleTab({ data, setF, toggle }) {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── VENOUS MODULE TAB ────────────────────────────────────────────────────────
+
+function VenousModuleTab({ data, setF, toggle }) {
+  const vcssTotal = ['vcss_pain','vcss_varicose_veins','vcss_venous_edema','vcss_skin_pigmentation',
+    'vcss_inflammation','vcss_induration','vcss_ulcer_active','vcss_ulcer_duration',
+    'vcss_ulcer_size','vcss_compression_use'].reduce((s, k) => s + (Number(data[k]) || 0), 0);
+
+  const ceapDesc = ['C0 – No visible disease','C1 – Telangiectasia / reticular veins',
+    'C2 – Varicose veins','C3 – Edema','C4a – Pigmentation / eczema',
+    'C4b – Lipodermatosclerosis / atrophie blanche','C5 – Healed venous ulcer','C6 – Active venous ulcer'];
+
+  return (
+    <div className="card">
+      <div className="card-body">
+        <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'center' }}>
+          <div style={{ background: '#1e293b', border: '1px solid #334155', borderRadius: 8, padding: '12px 20px', textAlign: 'center', minWidth: 100 }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: vcssTotal >= 15 ? '#ef4444' : vcssTotal >= 8 ? '#f59e0b' : '#10b981' }}>{vcssTotal}/30</div>
+            <div style={{ fontSize: 11, color: '#64748b' }}>VCSS Score</div>
+          </div>
+          <div style={{ fontSize: 12, color: '#94a3b8' }}>
+            Venous Clinical Severity Score: 0–30. ≥15 = Severe. Each item 0–3 (absent/mild/moderate/severe).
+          </div>
+        </div>
+        <div className="form-grid form-grid-3">
+          <div className="section-header">CEAP Classification</div>
+          <div className="form-group">
+            <label className="form-label">C — Clinical Class</label>
+            <select className="form-select" value={data.ceap_clinical} onChange={e => setF('ceap_clinical', e.target.value)}>
+              <option value="">Select...</option>
+              {ceapDesc.map((d, i) => <option key={i} value={i}>{d}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">E — Etiology</label>
+            <select className="form-select" value={data.ceap_etiology} onChange={e => setF('ceap_etiology', e.target.value)}>
+              <option value="">Select...</option>
+              <option>Congenital</option><option>Primary</option><option>Secondary</option><option>Unknown</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">A — Anatomy</label>
+            <input className="form-input" value={data.ceap_anatomy} onChange={e => setF('ceap_anatomy', e.target.value)}
+              placeholder="e.g. Superficial, Deep, Perforator" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">P — Pathophysiology</label>
+            <input className="form-input" value={data.ceap_pathophysiology} onChange={e => setF('ceap_pathophysiology', e.target.value)}
+              placeholder="e.g. Reflux, Obstruction, Both" />
+          </div>
+          <div className="section-header">VCSS — Venous Clinical Severity Score</div>
+          {[
+            ['vcss_pain', 'Pain'], ['vcss_varicose_veins', 'Varicose Veins'], ['vcss_venous_edema', 'Venous Edema'],
+            ['vcss_skin_pigmentation', 'Skin Pigmentation'], ['vcss_inflammation', 'Inflammation'],
+            ['vcss_induration', 'Induration'], ['vcss_ulcer_active', 'Active Ulcer'],
+            ['vcss_ulcer_duration', 'Ulcer Duration'], ['vcss_ulcer_size', 'Ulcer Size'],
+            ['vcss_compression_use', 'Compression Use']
+          ].map(([field, label]) => (
+            <div className="form-group" key={field}>
+              <label className="form-label">{label} (0–3)</label>
+              <select className="form-select" value={data[field]} onChange={e => setF(field, Number(e.target.value))}>
+                <option value={0}>0 — Absent</option><option value={1}>1 — Mild</option>
+                <option value={2}>2 — Moderate</option><option value={3}>3 — Severe</option>
+              </select>
+            </div>
+          ))}
+          <div className="section-header">Procedure Details</div>
+          <div className="form-group">
+            <label className="form-label">Vein Treated</label>
+            <input className="form-input" value={data.vein_treated} onChange={e => setF('vein_treated', e.target.value)}
+              placeholder="GSV, SSV, tributary..." />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Technique</label>
+            <select className="form-select" value={data.technique} onChange={e => setF('technique', e.target.value)}>
+              <option value="">Select...</option>
+              <option>EVLA</option><option>RFA</option><option>Sclerotherapy</option>
+              <option>Phlebectomy</option><option>Open Stripping</option><option>Stenting</option><option>Other</option>
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Closure Length (cm)</label>
+            <input className="form-input" type="number" value={data.closure_length_cm}
+              onChange={e => setF('closure_length_cm', e.target.value)} placeholder="cm" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Foam Volume (mL)</label>
+            <input className="form-input" type="number" value={data.foam_volume_ml}
+              onChange={e => setF('foam_volume_ml', e.target.value)} placeholder="mL" />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Recurrence</label>
+            <div className="yn-group">
+              <button className={`yn-btn ${data.recurrence ? 'active-yes' : ''}`} onClick={() => toggle('recurrence')}>Yes</button>
+              <button className={`yn-btn ${!data.recurrence ? 'active-no' : ''}`} onClick={() => { if (data.recurrence) toggle('recurrence'); }}>No</button>
+            </div>
+          </div>
+          <div className="form-group full-width">
+            <label className="form-label">Notes</label>
+            <textarea className="form-textarea" value={data.notes}
+              onChange={e => setF('notes', e.target.value)} placeholder="Additional venous procedure notes..." />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── DEVICES TAB ─────────────────────────────────────────────────────────────
+
+function DevicesTab({ procedureId }) {
+  const { notify } = useApp();
+  const [devices, setDevices] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState(null);
+  const [form, setForm] = useState({
+    device_name: '', manufacturer: '', model: '', size_description: '',
+    lot_number: '', serial_number: '', ref_number: '', expiry_date: '', implanted: 1, notes: ''
+  });
+
+  useEffect(() => { loadDevices(); }, [procedureId]);
+
+  async function loadDevices() {
+    const res = await window.electronAPI.getDevices(procedureId);
+    if (res.success) setDevices(res.data);
+  }
+
+  function setF(field, val) { setForm(f => ({ ...f, [field]: val })); }
+
+  async function handleSave() {
+    if (!form.device_name.trim()) { notify('Device name is required', 'error'); return; }
+    const data = { ...form, procedure_id: procedureId };
+    let res;
+    if (editId) { res = await window.electronAPI.updateDevice(editId, data); }
+    else { res = await window.electronAPI.createDevice(data); }
+    if (res.success) {
+      notify(editId ? 'Device updated' : 'Device logged');
+      setAdding(false); setEditId(null);
+      setForm({ device_name: '', manufacturer: '', model: '', size_description: '',
+        lot_number: '', serial_number: '', ref_number: '', expiry_date: '', implanted: 1, notes: '' });
+      await loadDevices();
+    } else { notify(res.error || 'Save failed', 'error'); }
+  }
+
+  async function handleDelete(id) {
+    if (!confirm('Remove this device from the log?')) return;
+    const res = await window.electronAPI.deleteDevice(id);
+    if (res.success) { notify('Device removed'); await loadDevices(); }
+  }
+
+  function startEdit(d) {
+    setEditId(d.device_id);
+    setForm({ device_name: d.device_name || '', manufacturer: d.manufacturer || '',
+      model: d.model || '', size_description: d.size_description || '',
+      lot_number: d.lot_number || '', serial_number: d.serial_number || '',
+      ref_number: d.ref_number || '', expiry_date: d.expiry_date || '',
+      implanted: d.implanted ?? 1, notes: d.notes || '' });
+    setAdding(true);
+  }
+
+  return (
+    <div>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-header">
+          <div className="card-title">🔩 Device / Implant Log</div>
+          {!adding && <button className="btn btn-primary btn-sm" onClick={() => setAdding(true)}>+ Add Device</button>}
+        </div>
+        {adding && (
+          <div className="card-body">
+            <div className="form-grid form-grid-3">
+              <div className="form-group">
+                <label className="form-label required">Device Name</label>
+                <input className="form-input" value={form.device_name} onChange={e => setF('device_name', e.target.value)}
+                  placeholder="e.g. Endurant II, Viabahn, Zilver PTX" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Manufacturer</label>
+                <input className="form-input" value={form.manufacturer} onChange={e => setF('manufacturer', e.target.value)}
+                  placeholder="e.g. Medtronic, Gore, Cook" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Model / REF</label>
+                <input className="form-input" value={form.model} onChange={e => setF('model', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Size / Description</label>
+                <input className="form-input" value={form.size_description} onChange={e => setF('size_description', e.target.value)}
+                  placeholder="e.g. 28mm × 120mm" />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Lot Number</label>
+                <input className="form-input" value={form.lot_number} onChange={e => setF('lot_number', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Serial Number</label>
+                <input className="form-input" value={form.serial_number} onChange={e => setF('serial_number', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">REF Number</label>
+                <input className="form-input" value={form.ref_number} onChange={e => setF('ref_number', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Expiry Date</label>
+                <input className="form-input" type="date" value={form.expiry_date} onChange={e => setF('expiry_date', e.target.value)} />
+              </div>
+              <div className="form-group">
+                <label className="form-label">Implanted</label>
+                <div className="yn-group">
+                  <button className={`yn-btn ${form.implanted ? 'active-yes' : ''}`} onClick={() => setF('implanted', 1)}>Yes</button>
+                  <button className={`yn-btn ${!form.implanted ? 'active-no' : ''}`} onClick={() => setF('implanted', 0)}>No (Removed)</button>
+                </div>
+              </div>
+              <div className="form-group full-width">
+                <label className="form-label">Notes</label>
+                <input className="form-input" value={form.notes} onChange={e => setF('notes', e.target.value)}
+                  placeholder="e.g. bilateral iliac extensions, proximal fixation zone 0" />
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 12 }}>
+              <button className="btn btn-secondary" onClick={() => { setAdding(false); setEditId(null); }}>Cancel</button>
+              <button className="btn btn-primary" onClick={handleSave}>💾 {editId ? 'Update' : 'Log Device'}</button>
+            </div>
+          </div>
+        )}
+      </div>
+      {devices.length === 0 && !adding ? (
+        <div className="card">
+          <div className="empty-state" style={{ padding: 40 }}>
+            <div className="empty-state-icon">🔩</div>
+            <div className="empty-state-title">No devices logged</div>
+            <div className="empty-state-desc">Log implants, stents, grafts, and endografts — useful for recalls and inventory analysis</div>
+            <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => setAdding(true)}>+ Add Device</button>
+          </div>
+        </div>
+      ) : (
+        <div className="card">
+          <div className="table-container" style={{ border: 'none' }}>
+            <table className="data-table">
+              <thead>
+                <tr><th>Device</th><th>Manufacturer</th><th>Size</th><th>Lot #</th><th>REF #</th><th>Expiry</th><th>Implanted</th><th></th></tr>
+              </thead>
+              <tbody>
+                {devices.map(d => (
+                  <tr key={d.device_id}>
+                    <td><div style={{ fontWeight: 600 }}>{d.device_name}</div>{d.model && <div style={{ fontSize: 12, color: '#64748b' }}>{d.model}</div>}</td>
+                    <td>{d.manufacturer || '—'}</td>
+                    <td style={{ fontFamily: 'monospace' }}>{d.size_description || '—'}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.lot_number || '—'}</td>
+                    <td style={{ fontFamily: 'monospace', fontSize: 12 }}>{d.ref_number || '—'}</td>
+                    <td>{d.expiry_date || '—'}</td>
+                    <td>{d.implanted ? <span className="badge badge-success">Yes</span> : <span className="badge badge-secondary">Removed</span>}</td>
+                    <td>
+                      <div className="btn-group">
+                        <button className="btn btn-secondary btn-sm" onClick={() => startEdit(d)}>Edit</button>
+                        <button className="btn btn-sm" style={{ background: '#7f1d1d', color: '#fca5a5', border: 'none' }}
+                          onClick={() => handleDelete(d.device_id)}>Del</button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

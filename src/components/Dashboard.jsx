@@ -10,6 +10,7 @@ const COLORS = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'
 export default function Dashboard() {
   const { navigate } = useApp();
   const [stats, setStats] = useState(null);
+  const [redFlags, setRedFlags] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -19,8 +20,12 @@ export default function Dashboard() {
   async function loadStats() {
     setLoading(true);
     try {
-      const res = await window.electronAPI.getDashboardStats();
-      if (res.success) setStats(res.data);
+      const [statsRes, flagsRes] = await Promise.all([
+        window.electronAPI.getDashboardStats(),
+        window.electronAPI.getRedFlags()
+      ]);
+      if (statsRes.success) setStats(statsRes.data);
+      if (flagsRes.success) setRedFlags(flagsRes.data);
     } finally {
       setLoading(false);
     }
@@ -103,6 +108,69 @@ export default function Dashboard() {
           </span>
         </div>
       </div>
+
+      {/* Red-Flag Alerts for M&M Review */}
+      {redFlags && (redFlags.strokeDeath.length > 0 || redFlags.missedFollowups.length > 0 || redFlags.carotidStrokes.length > 0) && (
+        <div style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 18 }}>🚨</span>
+            <h2 style={{ color: '#ef4444', margin: 0, fontSize: 16, fontWeight: 700 }}>M&M Review Alerts</h2>
+            <span style={{ fontSize: 12, color: '#64748b' }}>— Requires clinical review</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {redFlags.strokeDeath.map(r => (
+              <div key={r.procedure_id}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#450a0a', border: '1px solid #7f1d1d', borderLeft: '4px solid #ef4444', borderRadius: 8, padding: '10px 14px', cursor: 'pointer' }}
+                onClick={() => navigate('procedure-edit', { procedureId: r.procedure_id })}>
+                <span style={{ fontSize: 20 }}>⚠️</span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 600, color: '#fca5a5' }}>{r.patient_name}</span>
+                  <span style={{ color: '#94a3b8', margin: '0 8px', fontSize: 12 }}>MRN: {r.mrn}</span>
+                  <span style={{ fontSize: 12, color: '#f87171' }}>{r.procedure_type} · {r.procedure_date}</span>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {r.stroke ? <span className="badge badge-danger">Stroke</span> : null}
+                  {r.death_in_hospital ? <span className="badge badge-danger">In-Hospital Death</span> : null}
+                  {r.death_30_day ? <span className="badge badge-danger">30-Day Death</span> : null}
+                  {r.amputation ? <span className="badge badge-danger">Amputation</span> : null}
+                  {r.reoperation ? <span style={{ background: '#78350f', color: '#fcd34d', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4 }}>Reoperation</span> : null}
+                </div>
+                <span style={{ color: '#64748b', fontSize: 12 }}>→ View</span>
+              </div>
+            ))}
+            {redFlags.carotidStrokes.map(r => (
+              <div key={`cs-${r.procedure_id}`}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#450a0a', border: '1px solid #7f1d1d', borderLeft: '4px solid #dc2626', borderRadius: 8, padding: '10px 14px', cursor: 'pointer' }}
+                onClick={() => navigate('procedure-edit', { procedureId: r.procedure_id })}>
+                <span style={{ fontSize: 20 }}>🧠</span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 600, color: '#fca5a5' }}>{r.patient_name}</span>
+                  <span style={{ color: '#94a3b8', margin: '0 8px', fontSize: 12 }}>MRN: {r.mrn}</span>
+                  <span style={{ fontSize: 12, color: '#f87171' }}>Carotid · {r.procedure_date}</span>
+                </div>
+                <span className="badge badge-danger">Periop Stroke ({r.periop_stroke_side})</span>
+                <span style={{ color: '#64748b', fontSize: 12 }}>→ View</span>
+              </div>
+            ))}
+            {redFlags.missedFollowups.map(r => (
+              <div key={`mf-${r.procedure_id}`}
+                style={{ display: 'flex', alignItems: 'center', gap: 12, background: '#431407', border: '1px solid #7c2d12', borderLeft: '4px solid #f97316', borderRadius: 8, padding: '10px 14px', cursor: 'pointer' }}
+                onClick={() => navigate('patient-edit', { patientId: r.patient_id })}>
+                <span style={{ fontSize: 20 }}>📅</span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontWeight: 600, color: '#fdba74' }}>{r.patient_name}</span>
+                  <span style={{ color: '#94a3b8', margin: '0 8px', fontSize: 12 }}>MRN: {r.mrn}</span>
+                  <span style={{ fontSize: 12, color: '#fb923c' }}>{r.procedure_type} · Proc date: {r.procedure_date}</span>
+                </div>
+                <span style={{ background: '#7c2d12', color: '#fdba74', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4 }}>
+                  Follow-up due: {r.followup_date}
+                </span>
+                <span style={{ color: '#64748b', fontSize: 12 }}>→ View</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="charts-grid">
         {/* Monthly Procedure Volume */}

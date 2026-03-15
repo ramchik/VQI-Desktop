@@ -318,6 +318,63 @@ CREATE TABLE IF NOT EXISTS dialysis_access_module (
   infection INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS venous_module (
+  venous_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  procedure_id INTEGER NOT NULL REFERENCES procedures(procedure_id) ON DELETE CASCADE,
+  ceap_clinical INTEGER CHECK(ceap_clinical BETWEEN 0 AND 6),
+  ceap_etiology TEXT CHECK(ceap_etiology IN ('Congenital','Primary','Secondary','Unknown')),
+  ceap_anatomy TEXT,
+  ceap_pathophysiology TEXT,
+  vcss_pain INTEGER DEFAULT 0,
+  vcss_varicose_veins INTEGER DEFAULT 0,
+  vcss_venous_edema INTEGER DEFAULT 0,
+  vcss_skin_pigmentation INTEGER DEFAULT 0,
+  vcss_inflammation INTEGER DEFAULT 0,
+  vcss_induration INTEGER DEFAULT 0,
+  vcss_ulcer_active INTEGER DEFAULT 0,
+  vcss_ulcer_duration INTEGER DEFAULT 0,
+  vcss_ulcer_size INTEGER DEFAULT 0,
+  vcss_compression_use INTEGER DEFAULT 0,
+  vein_treated TEXT,
+  technique TEXT CHECK(technique IN ('EVLA','RFA','Sclerotherapy','Phlebectomy','Open Stripping','Stenting','Other')),
+  closure_length_cm REAL,
+  foam_volume_ml REAL,
+  recurrence INTEGER DEFAULT 0,
+  notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  device_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  procedure_id INTEGER NOT NULL REFERENCES procedures(procedure_id) ON DELETE CASCADE,
+  device_name TEXT NOT NULL,
+  manufacturer TEXT,
+  model TEXT,
+  size_description TEXT,
+  lot_number TEXT,
+  serial_number TEXT,
+  ref_number TEXT,
+  expiry_date TEXT,
+  implanted INTEGER DEFAULT 1,
+  notes TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS procedure_photos (
+  photo_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  procedure_id INTEGER NOT NULL REFERENCES procedures(procedure_id) ON DELETE CASCADE,
+  patient_id INTEGER NOT NULL REFERENCES patients(patient_id) ON DELETE CASCADE,
+  file_path TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  taken_date TEXT,
+  anatomical_location TEXT,
+  photo_type TEXT CHECK(photo_type IN ('Pre-operative','Intraoperative','Post-operative','Follow-up','Wound')),
+  wifi_wound INTEGER CHECK(wifi_wound BETWEEN 0 AND 3),
+  wifi_ischemia INTEGER CHECK(wifi_ischemia BETWEEN 0 AND 3),
+  wifi_infection INTEGER CHECK(wifi_infection BETWEEN 0 AND 3),
+  notes TEXT,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   log_id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(user_id),
