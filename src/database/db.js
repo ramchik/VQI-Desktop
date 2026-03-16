@@ -247,8 +247,17 @@ function createProcedure(data) {
   return { procedure_id: procedureId };
 }
 
+const PROCEDURE_COLUMNS = new Set([
+  'patient_id', 'procedure_type', 'procedure_date', 'surgeon_id', 'assistant',
+  'hospital', 'urgency', 'anesthesia_type', 'indication', 'symptom_status', 'admission_type',
+  'preop_imaging', 'stenosis_percent', 'aneurysm_diameter', 'aneurysm_growth_rate', 'abi_preop',
+  'toe_pressure', 'rutherford_class', 'wound_classification', 'infection_present', 'tissue_loss',
+  'baseline_creatinine', 'hemoglobin', 'platelet_count', 'notes'
+]);
+
 function updateProcedure(procedureId, data) {
-  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, venous_module, ...procData } = data;
+  const { intraoperative, postoperative, evar_module, carotid_module, pad_module, venous_module, ...rawProcData } = data;
+  const procData = Object.fromEntries(Object.entries(rawProcData).filter(([k]) => PROCEDURE_COLUMNS.has(k)));
   if (Object.keys(procData).length > 0) {
     const fields = Object.keys(procData).map(k => `${k} = @${k}`).join(', ');
     db.prepare(`UPDATE procedures SET ${fields}, updated_at = datetime('now') WHERE procedure_id = @procedure_id`)

@@ -152,13 +152,18 @@ export default function ProcedureForm({ procedureId, patientId }) {
     const res = await window.electronAPI.getProcedureById(procedureId);
     if (res.success && res.data) {
       const d = res.data;
-      setProc({ ...EMPTY_PROC, ...stripNulls(d) });
-      if (d.intraoperative) setIntraop({ ...EMPTY_INTRAOP, ...stripNulls(d.intraoperative) });
-      if (d.postoperative) setPostop({ ...EMPTY_POSTOP, ...stripNulls(d.postoperative) });
-      if (d.evar_module) setEvar({ ...EMPTY_EVAR, ...stripNulls(d.evar_module) });
-      if (d.carotid_module) setCarotid({ ...EMPTY_CAROTID, ...stripNulls(d.carotid_module) });
-      if (d.pad_module) setPad({ ...EMPTY_PAD, ...stripNulls(d.pad_module) });
-      if (d.venous_module) setVenous({ ...EMPTY_VENOUS, ...stripNulls(d.venous_module) });
+      // Exclude joined/computed fields that don't belong to the procedures table
+      const { patient_name, mrn, date_of_birth, sex, surgeon_name,
+              intraoperative, postoperative, followups,
+              evar_module, carotid_module, pad_module, venous_module,
+              ...procFields } = d;
+      setProc({ ...EMPTY_PROC, ...stripNulls(procFields) });
+      if (intraoperative) setIntraop({ ...EMPTY_INTRAOP, ...stripNulls(intraoperative) });
+      if (postoperative) setPostop({ ...EMPTY_POSTOP, ...stripNulls(postoperative) });
+      if (evar_module) setEvar({ ...EMPTY_EVAR, ...stripNulls(evar_module) });
+      if (carotid_module) setCarotid({ ...EMPTY_CAROTID, ...stripNulls(carotid_module) });
+      if (pad_module) setPad({ ...EMPTY_PAD, ...stripNulls(pad_module) });
+      if (venous_module) setVenous({ ...EMPTY_VENOUS, ...stripNulls(venous_module) });
     }
     setLoading(false);
   }
