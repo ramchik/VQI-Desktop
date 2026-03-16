@@ -57,11 +57,20 @@ function loginUser(username, password) {
 
 // ─── PATIENTS ────────────────────────────────────────────────────────────────
 
+const NOSOLOGY_PROCEDURE_TYPES = {
+  Carotid: ['Carotid Endarterectomy', 'Carotid Artery Stenting', 'TCAR (Transcarotid Artery Revascularization)'],
+  Aortic:  ['EVAR (Endovascular Aortic Repair)', 'TEVAR (Thoracic EVAR)', 'Open AAA Repair', 'Open Thoracoabdominal Aortic Repair'],
+  PAD:     ['Peripheral Bypass', 'Peripheral Angioplasty/Stenting', 'Lower Extremity Amputation', 'Upper Extremity Amputation'],
+  Venous:  ['Varicose Vein Ablation (EVLA/RFA)', 'Phlebectomy', 'Sclerotherapy', 'Venous Stenting', 'Deep Venous Reconstruction'],
+  Dialysis: ['Dialysis Access Creation', 'Dialysis Access Revision'],
+};
+
 function getPatients(filters = {}) {
   let query = `
     SELECT p.*,
       (SELECT COUNT(*) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS procedure_count,
-      (SELECT MAX(procedure_date) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS last_procedure_date
+      (SELECT MAX(procedure_date) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS last_procedure_date,
+      (SELECT GROUP_CONCAT(DISTINCT pr.procedure_type) FROM procedures pr WHERE pr.patient_id = p.patient_id) AS procedure_types
     FROM patients p
     WHERE 1=1
   `;
@@ -72,6 +81,11 @@ function getPatients(filters = {}) {
     params.push(s, s, s);
   }
   if (filters.sex) { query += ` AND p.sex = ?`; params.push(filters.sex); }
+  if (filters.nosology && NOSOLOGY_PROCEDURE_TYPES[filters.nosology]) {
+    const types = NOSOLOGY_PROCEDURE_TYPES[filters.nosology];
+    query += ` AND EXISTS (SELECT 1 FROM procedures pr WHERE pr.patient_id = p.patient_id AND pr.procedure_type IN (${types.map(() => '?').join(',')}))`;
+    params.push(...types);
+  }
   query += ` ORDER BY p.last_name, p.first_name`;
   if (filters.limit) { query += ` LIMIT ? OFFSET ?`; params.push(filters.limit, filters.offset || 0); }
   return db.prepare(query).all(...params);

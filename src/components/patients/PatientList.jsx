@@ -7,12 +7,28 @@ const AGE_FROM_DOB = (dob) => {
   return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
 };
 
+const NOSOLOGY_CATEGORIES = {
+  Carotid:  { label: 'Carotid',  color: '#3b82f6', bg: '#eff6ff', types: ['Carotid Endarterectomy','Carotid Artery Stenting','TCAR (Transcarotid Artery Revascularization)'] },
+  Aortic:   { label: 'Aortic',   color: '#ef4444', bg: '#fef2f2', types: ['EVAR (Endovascular Aortic Repair)','TEVAR (Thoracic EVAR)','Open AAA Repair','Open Thoracoabdominal Aortic Repair'] },
+  PAD:      { label: 'PAD',      color: '#f97316', bg: '#fff7ed', types: ['Peripheral Bypass','Peripheral Angioplasty/Stenting','Lower Extremity Amputation','Upper Extremity Amputation'] },
+  Venous:   { label: 'Venous',   color: '#8b5cf6', bg: '#f5f3ff', types: ['Varicose Vein Ablation (EVLA/RFA)','Phlebectomy','Sclerotherapy','Venous Stenting','Deep Venous Reconstruction'] },
+  Dialysis: { label: 'Dialysis', color: '#10b981', bg: '#ecfdf5', types: ['Dialysis Access Creation','Dialysis Access Revision'] },
+};
+
+function getNosologyBadges(procedureTypesStr) {
+  if (!procedureTypesStr) return [];
+  const types = procedureTypesStr.split(',');
+  return Object.entries(NOSOLOGY_CATEGORIES)
+    .filter(([, cat]) => types.some(t => cat.types.includes(t)))
+    .map(([key, cat]) => ({ key, ...cat }));
+}
+
 export default function PatientList() {
   const { navigate, notify } = useApp();
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ sex: '' });
+  const [filters, setFilters] = useState({ sex: '', nosology: '' });
   const [confirmDelete, setConfirmDelete] = useState(null);
 
   const loadPatients = useCallback(async () => {
@@ -80,7 +96,20 @@ export default function PatientList() {
             <option value="Female">Female</option>
             <option value="Other">Other</option>
           </select>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setFilters({ sex: '' }); }}>
+          <select
+            className="form-select"
+            style={{ width: 160 }}
+            value={filters.nosology}
+            onChange={e => setFilters(f => ({ ...f, nosology: e.target.value }))}
+          >
+            <option value="">All Nosologies</option>
+            <option value="Carotid">Carotid</option>
+            <option value="Aortic">Aortic</option>
+            <option value="PAD">PAD</option>
+            <option value="Venous">Venous</option>
+            <option value="Dialysis">Dialysis</option>
+          </select>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setFilters({ sex: '', nosology: '' }); }}>
             Clear
           </button>
         </div>
@@ -130,6 +159,7 @@ export default function PatientList() {
                   <th>Date of Birth</th>
                   <th>Age</th>
                   <th>Sex</th>
+                  <th>Nosology</th>
                   <th>Procedures</th>
                   <th>Last Procedure</th>
                   <th>Actions</th>
@@ -155,6 +185,21 @@ export default function PatientList() {
                       <span className={`badge ${p.sex === 'Male' ? 'badge-info' : p.sex === 'Female' ? 'badge-purple' : 'badge-gray'}`}>
                         {p.sex || '—'}
                       </span>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {getNosologyBadges(p.procedure_types).map(cat => (
+                          <span key={cat.key} style={{
+                            display: 'inline-block', padding: '1px 7px', borderRadius: 10,
+                            fontSize: '0.72rem', fontWeight: 600,
+                            color: cat.color, background: cat.bg,
+                            border: `1px solid ${cat.color}40`
+                          }}>
+                            {cat.label}
+                          </span>
+                        ))}
+                        {!p.procedure_types && <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>—</span>}
+                      </div>
                     </td>
                     <td>
                       <span className="badge badge-gray">{p.procedure_count || 0}</span>
