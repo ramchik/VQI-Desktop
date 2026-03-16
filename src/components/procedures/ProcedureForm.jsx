@@ -96,11 +96,12 @@ export default function ProcedureForm({ procedureId, patientId }) {
 
   const isEdit = !!procedureId;
   const procType = proc.procedure_type;
+  const currentModule = allProcedureTypes.find(t => t.name === procType)?.module || null;
   const typesByModule = (mod) => allProcedureTypes.filter(t => t.module === mod && t.active).map(t => t.name);
-  const showCarotid = typesByModule('carotid').includes(procType);
-  const showEvar    = typesByModule('evar').includes(procType);
-  const showPad     = typesByModule('pad').includes(procType);
-  const showVenous  = typesByModule('venous').includes(procType);
+  const showCarotid = currentModule === 'carotid';
+  const showEvar    = currentModule === 'evar';
+  const showPad     = currentModule === 'pad';
+  const showVenous  = currentModule === 'venous';
 
   useEffect(() => {
     loadSurgeons();
@@ -298,8 +299,8 @@ export default function ProcedureForm({ procedureId, patientId }) {
         selectedPatient={selectedPatient} patientSearch={patientSearch} onPatientSearch={searchPatients}
         patientResults={patientResults} showPatientDropdown={showPatientDropdown}
         onSelectPatient={selectPatient} onCloseDropdown={() => setShowPatientDropdown(false)} />}
-      {tab === 'preop' && <PreopTab proc={proc} setF={setF(setProc)} />}
-      {tab === 'intraop' && <IntraopTab data={intraop} setF={setF(setIntraop)} toggle={(f) => toggle(setIntraop, f)} procType={procType} />}
+      {tab === 'preop' && <PreopTab proc={proc} setF={setF(setProc)} procModule={currentModule} />}
+      {tab === 'intraop' && <IntraopTab data={intraop} setF={setF(setIntraop)} toggle={(f) => toggle(setIntraop, f)} procType={procType} procModule={currentModule} />}
       {tab === 'postop' && <PostopTab data={postop} setF={setF(setPostop)} toggle={(f) => toggle(setPostop, f)} />}
       {tab === 'carotid' && showCarotid && <CarotidModuleTab data={carotid} setF={setF(setCarotid)} toggle={(f) => toggle(setCarotid, f)} />}
       {tab === 'evar' && showEvar && <EvarModuleTab data={evar} setF={setF(setEvar)} toggle={(f) => toggle(setEvar, f)} procType={procType} />}
@@ -424,7 +425,7 @@ function ProcedureInfoTab({ proc, setProc, surgeons, allProcedureTypes, setF, se
   );
 }
 
-function PreopTab({ proc, setF }) {
+function PreopTab({ proc, setF, procModule }) {
   return (
     <div className="card">
       <div className="card-body">
@@ -460,45 +461,86 @@ function PreopTab({ proc, setF }) {
             </div>
           </div>
 
-          <div className="section-header">Vascular Measurements</div>
-          <div className="form-group">
-            <label className="form-label">Stenosis Degree (%)</label>
-            <input className="form-input" type="number" min="0" max="100" value={proc.stenosis_percent}
-              onChange={e => setF('stenosis_percent', e.target.value)} placeholder="e.g., 70" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Aneurysm Diameter (cm)</label>
-            <input className="form-input" type="number" step="0.1" value={proc.aneurysm_diameter}
-              onChange={e => setF('aneurysm_diameter', e.target.value)} placeholder="e.g., 5.5" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Aneurysm Growth Rate (cm/yr)</label>
-            <input className="form-input" type="number" step="0.1" value={proc.aneurysm_growth_rate}
-              onChange={e => setF('aneurysm_growth_rate', e.target.value)} placeholder="e.g., 0.5" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Ankle-Brachial Index (ABI)</label>
-            <input className="form-input" type="number" step="0.01" min="0" max="2" value={proc.abi_preop}
-              onChange={e => setF('abi_preop', e.target.value)} placeholder="e.g., 0.65" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Toe Pressure (mmHg)</label>
-            <input className="form-input" type="number" value={proc.toe_pressure}
-              onChange={e => setF('toe_pressure', e.target.value)} placeholder="e.g., 40" />
-          </div>
-          <div className="form-group">
-            <label className="form-label">Rutherford Classification</label>
-            <select className="form-select" value={proc.rutherford_class} onChange={e => setF('rutherford_class', e.target.value)}>
-              <option value="">Select...</option>
-              <option value="0">0 - Asymptomatic</option>
-              <option value="1">1 - Mild claudication</option>
-              <option value="2">2 - Moderate claudication</option>
-              <option value="3">3 - Severe claudication</option>
-              <option value="4">4 - Rest pain</option>
-              <option value="5">5 - Minor tissue loss</option>
-              <option value="6">6 - Major tissue loss</option>
-            </select>
-          </div>
+          {/* Carotid-specific */}
+          {procModule === 'carotid' && <>
+            <div className="section-header">Carotid Measurements</div>
+            <div className="form-group">
+              <label className="form-label">Stenosis Degree (%)</label>
+              <input className="form-input" type="number" min="0" max="100" value={proc.stenosis_percent}
+                onChange={e => setF('stenosis_percent', e.target.value)} placeholder="e.g., 70" />
+            </div>
+            <div></div><div></div>
+          </>}
+
+          {/* Aortic-specific */}
+          {procModule === 'evar' && <>
+            <div className="section-header">Aortic Measurements</div>
+            <div className="form-group">
+              <label className="form-label">Aneurysm Diameter (cm)</label>
+              <input className="form-input" type="number" step="0.1" value={proc.aneurysm_diameter}
+                onChange={e => setF('aneurysm_diameter', e.target.value)} placeholder="e.g., 5.5" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Aneurysm Growth Rate (cm/yr)</label>
+              <input className="form-input" type="number" step="0.1" value={proc.aneurysm_growth_rate}
+                onChange={e => setF('aneurysm_growth_rate', e.target.value)} placeholder="e.g., 0.5" />
+            </div>
+            <div></div>
+          </>}
+
+          {/* PAD / Dialysis / Amputation-specific */}
+          {(procModule === 'pad' || procModule === 'dialysis') && <>
+            <div className="section-header">Peripheral Measurements</div>
+            <div className="form-group">
+              <label className="form-label">Ankle-Brachial Index (ABI)</label>
+              <input className="form-input" type="number" step="0.01" min="0" max="2" value={proc.abi_preop}
+                onChange={e => setF('abi_preop', e.target.value)} placeholder="e.g., 0.65" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Toe Pressure (mmHg)</label>
+              <input className="form-input" type="number" value={proc.toe_pressure}
+                onChange={e => setF('toe_pressure', e.target.value)} placeholder="e.g., 40" />
+            </div>
+            <div className="form-group">
+              <label className="form-label">Rutherford Classification</label>
+              <select className="form-select" value={proc.rutherford_class} onChange={e => setF('rutherford_class', e.target.value)}>
+                <option value="">Select...</option>
+                <option value="0">0 - Asymptomatic</option>
+                <option value="1">1 - Mild claudication</option>
+                <option value="2">2 - Moderate claudication</option>
+                <option value="3">3 - Severe claudication</option>
+                <option value="4">4 - Rest pain</option>
+                <option value="5">5 - Minor tissue loss</option>
+                <option value="6">6 - Major tissue loss</option>
+              </select>
+            </div>
+          </>}
+
+          {/* Wound status — PAD, dialysis, and 'other' where relevant */}
+          {(procModule === 'pad' || procModule === 'dialysis' || !procModule) && <>
+            <div className="section-header">Wound Status</div>
+            <div className="form-group">
+              <label className="form-label">Wound Classification</label>
+              <select className="form-select" value={proc.wound_classification} onChange={e => setF('wound_classification', e.target.value)}>
+                <option value="">Select...</option>
+                <option>Clean</option><option>Clean-contaminated</option><option>Contaminated</option><option>Dirty</option>
+              </select>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Infection Present</label>
+              <div className="yn-group">
+                <button className={`yn-btn ${proc.infection_present ? 'active-yes' : ''}`} onClick={() => setF('infection_present', proc.infection_present ? 0 : 1)}>Yes</button>
+                <button className={`yn-btn ${!proc.infection_present ? 'active-no' : ''}`} onClick={() => setF('infection_present', 0)}>No</button>
+              </div>
+            </div>
+            <div className="form-group">
+              <label className="form-label">Tissue Loss</label>
+              <div className="yn-group">
+                <button className={`yn-btn ${proc.tissue_loss ? 'active-yes' : ''}`} onClick={() => setF('tissue_loss', proc.tissue_loss ? 0 : 1)}>Yes</button>
+                <button className={`yn-btn ${!proc.tissue_loss ? 'active-no' : ''}`} onClick={() => setF('tissue_loss', 0)}>No</button>
+              </div>
+            </div>
+          </>}
 
           <div className="section-header">Laboratory Values</div>
           <div className="form-group">
@@ -516,37 +558,14 @@ function PreopTab({ proc, setF }) {
             <input className="form-input" type="number" value={proc.platelet_count}
               onChange={e => setF('platelet_count', e.target.value)} placeholder="e.g., 250" />
           </div>
-
-          <div className="section-header">Wound Status</div>
-          <div className="form-group">
-            <label className="form-label">Wound Classification</label>
-            <select className="form-select" value={proc.wound_classification} onChange={e => setF('wound_classification', e.target.value)}>
-              <option value="">Select...</option>
-              <option>Clean</option><option>Clean-contaminated</option><option>Contaminated</option><option>Dirty</option>
-            </select>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Infection Present</label>
-            <div className="yn-group">
-              <button className={`yn-btn ${proc.infection_present ? 'active-yes' : ''}`} onClick={() => setF('infection_present', proc.infection_present ? 0 : 1)}>Yes</button>
-              <button className={`yn-btn ${!proc.infection_present ? 'active-no' : ''}`} onClick={() => setF('infection_present', 0)}>No</button>
-            </div>
-          </div>
-          <div className="form-group">
-            <label className="form-label">Tissue Loss</label>
-            <div className="yn-group">
-              <button className={`yn-btn ${proc.tissue_loss ? 'active-yes' : ''}`} onClick={() => setF('tissue_loss', proc.tissue_loss ? 0 : 1)}>Yes</button>
-              <button className={`yn-btn ${!proc.tissue_loss ? 'active-no' : ''}`} onClick={() => setF('tissue_loss', 0)}>No</button>
-            </div>
-          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function IntraopTab({ data, setF, toggle, procType }) {
-  const showFluoro = EVAR_TYPES.includes(procType) || procType?.includes('Angioplasty') || procType?.includes('Stenting');
+function IntraopTab({ data, setF, toggle, procType, procModule }) {
+  const showFluoro = procModule === 'evar' || procType?.includes('Angioplasty') || procType?.includes('Stenting');
 
   return (
     <div className="card">

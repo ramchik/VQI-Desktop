@@ -1,4 +1,4 @@
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, Component } from 'react';
 import Login from './components/Login';
 import Sidebar from './components/Sidebar';
 import Dashboard from './components/Dashboard';
@@ -13,6 +13,34 @@ import BackupManager from './components/admin/BackupManager';
 import ProcedureTypeSettings from './components/admin/ProcedureTypeSettings';
 import ResearchModule from './components/research/ResearchModule';
 
+class ErrorBoundary extends Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('VQI ErrorBoundary:', error, info); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          height: '100vh', gap: 16, fontFamily: 'sans-serif', color: '#334155' }}>
+          <div style={{ fontSize: 48 }}>⚠️</div>
+          <div style={{ fontSize: '1.2rem', fontWeight: 600 }}>Something went wrong</div>
+          <div style={{ fontSize: '0.85rem', color: '#64748b', maxWidth: 400, textAlign: 'center' }}>
+            {this.state.error?.message || 'An unexpected error occurred'}
+          </div>
+          <button
+            style={{ marginTop: 8, padding: '8px 20px', background: '#3b82f6', color: '#fff',
+              border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
+            onClick={() => this.setState({ error: null })}
+          >
+            Try Again
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export const AppContext = createContext(null);
 
 export function useApp() {
@@ -20,7 +48,12 @@ export function useApp() {
 }
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('vqi_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
   const [view, setView] = useState('dashboard');
   const [viewParams, setViewParams] = useState({});
   const [notification, setNotification] = useState(null);
@@ -41,14 +74,20 @@ export default function App() {
     setNotification({ message, type });
   }
 
+  function handleLogin(u) {
+    sessionStorage.setItem('vqi_user', JSON.stringify(u));
+    setUser(u);
+  }
+
   function handleLogout() {
+    sessionStorage.removeItem('vqi_user');
     setUser(null);
     setView('dashboard');
     setViewParams({});
   }
 
   if (!user) {
-    return <Login onLogin={setUser} />;
+    return <Login onLogin={handleLogin} />;
   }
 
   const contextValue = { user, navigate, notify };
@@ -64,7 +103,9 @@ export default function App() {
               {notification.message}
             </div>
           )}
-          <ViewRenderer view={view} params={viewParams} />
+          <ErrorBoundary key={view}>
+            <ViewRenderer view={view} params={viewParams} />
+          </ErrorBoundary>
         </main>
       </div>
     </AppContext.Provider>

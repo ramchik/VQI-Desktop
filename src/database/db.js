@@ -180,16 +180,25 @@ function createPatient(data) {
   return { patient_id: patientId };
 }
 
+const PATIENT_COLUMNS = new Set([
+  'mrn', 'first_name', 'last_name', 'date_of_birth', 'sex', 'race', 'ethnicity',
+  'height_cm', 'weight_kg', 'bmi', 'phone', 'email', 'address', 'insurance',
+  'referring_physician', 'primary_care_provider', 'zip_code', 'consent_signed', 'enrollment_date'
+]);
+
 function updatePatient(patientId, data) {
-  const { comorbidities, medications, ...patientData } = data;
+  const { comorbidities, medications, ...rawPatientData } = data;
+  const patientData = Object.fromEntries(Object.entries(rawPatientData).filter(([k]) => PATIENT_COLUMNS.has(k)));
   if (patientData.height_cm && patientData.weight_kg) {
     const h = patientData.height_cm / 100;
     patientData.bmi = parseFloat((patientData.weight_kg / (h * h)).toFixed(1));
   }
 
-  const fields = Object.keys(patientData).map(k => `${k} = @${k}`).join(', ');
-  db.prepare(`UPDATE patients SET ${fields}, updated_at = datetime('now') WHERE patient_id = @patient_id`)
-    .run({ ...patientData, patient_id: patientId });
+  if (Object.keys(patientData).length > 0) {
+    const fields = Object.keys(patientData).map(k => `${k} = @${k}`).join(', ');
+    db.prepare(`UPDATE patients SET ${fields}, updated_at = datetime('now') WHERE patient_id = @patient_id`)
+      .run({ ...patientData, patient_id: patientId });
+  }
 
   if (comorbidities) {
     const existing = db.prepare('SELECT comorbidity_id FROM comorbidities WHERE patient_id = ?').get(patientId);
