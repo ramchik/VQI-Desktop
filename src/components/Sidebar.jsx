@@ -7,13 +7,12 @@ const NAV_ITEMS = [
   { section: 'Patient Management' },
   { id: 'patients', label: 'Patient Registry', icon: '👥' },
   { id: 'patient-new', label: 'New Patient', icon: '➕' },
-  { section: 'Procedures' },
-  { id: 'procedure-new', label: 'New Procedure', icon: '🔬' },
   { section: 'Analytics & Research' },
   { id: 'reports', label: 'Reports & Export', icon: '📊' },
   { id: 'research', label: 'Research Workspace', icon: '🔬' },
   { section: 'Administration' },
   { id: 'users', label: 'User Management', icon: '👤' },
+  { id: 'procedure-settings', label: 'Procedure Types', icon: '🏷️' },
   { id: 'backup', label: 'Backup & Settings', icon: '💾' },
 ];
 
@@ -40,7 +39,7 @@ export default function Sidebar({ currentView, onNavigate, onLogout, user }) {
             return <div key={i} className="sidebar-section-label">{item.section}</div>;
           }
           // Only show admin items to administrators
-          if ((item.id === 'users' || item.id === 'backup') && user?.role !== 'administrator') {
+          if ((item.id === 'users' || item.id === 'backup' || item.id === 'procedure-settings') && user?.role !== 'administrator') {
             return null;
           }
           return (

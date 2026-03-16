@@ -7,13 +7,24 @@ const AGE_FROM_DOB = (dob) => {
   return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
 };
 
+function getNosologyBadges(procedureTypesStr, nosologyGroups, procedureTypes) {
+  if (!procedureTypesStr || !nosologyGroups.length) return [];
+  const usedTypes = new Set(procedureTypesStr.split(','));
+  const hitGroupIds = new Set(
+    procedureTypes.filter(pt => usedTypes.has(pt.name)).map(pt => pt.nosology_group_id).filter(Boolean)
+  );
+  return nosologyGroups.filter(g => hitGroupIds.has(g.group_id) && g.active);
+}
+
 export default function PatientList() {
   const { navigate, notify } = useApp();
   const [patients, setPatients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [filters, setFilters] = useState({ sex: '' });
+  const [filters, setFilters] = useState({ sex: '', nosology: '' });
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [nosologyGroups, setNosologyGroups] = useState([]);
+  const [procedureTypes, setProcedureTypes] = useState([]);
 
   const loadPatients = useCallback(async () => {
     setLoading(true);
@@ -24,6 +35,11 @@ export default function PatientList() {
       setLoading(false);
     }
   }, [search, filters]);
+
+  useEffect(() => {
+    window.electronAPI.getNosologyGroups().then(r => { if (r.success) setNosologyGroups(r.data); });
+    window.electronAPI.getProcedureTypes().then(r => { if (r.success) setProcedureTypes(r.data); });
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(loadPatients, 300);
@@ -80,7 +96,18 @@ export default function PatientList() {
             <option value="Female">Female</option>
             <option value="Other">Other</option>
           </select>
-          <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setFilters({ sex: '' }); }}>
+          <select
+            className="form-select"
+            style={{ width: 160 }}
+            value={filters.nosology}
+            onChange={e => setFilters(f => ({ ...f, nosology: e.target.value }))}
+          >
+            <option value="">All Nosologies</option>
+            {nosologyGroups.filter(g => g.active).map(g => (
+              <option key={g.group_id} value={g.name}>{g.name}</option>
+            ))}
+          </select>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setFilters({ sex: '', nosology: '' }); }}>
             Clear
           </button>
         </div>
@@ -130,6 +157,7 @@ export default function PatientList() {
                   <th>Date of Birth</th>
                   <th>Age</th>
                   <th>Sex</th>
+                  <th>Nosology</th>
                   <th>Procedures</th>
                   <th>Last Procedure</th>
                   <th>Actions</th>
@@ -155,6 +183,21 @@ export default function PatientList() {
                       <span className={`badge ${p.sex === 'Male' ? 'badge-info' : p.sex === 'Female' ? 'badge-purple' : 'badge-gray'}`}>
                         {p.sex || '—'}
                       </span>
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                        {getNosologyBadges(p.procedure_types, nosologyGroups, procedureTypes).map(g => (
+                          <span key={g.group_id} style={{
+                            display: 'inline-block', padding: '1px 7px', borderRadius: 10,
+                            fontSize: '0.72rem', fontWeight: 600,
+                            color: g.color, background: g.bg_color,
+                            border: `1px solid ${g.color}40`
+                          }}>
+                            {g.name}
+                          </span>
+                        ))}
+                        {!p.procedure_types && <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>—</span>}
+                      </div>
                     </td>
                     <td>
                       <span className="badge badge-gray">{p.procedure_count || 0}</span>

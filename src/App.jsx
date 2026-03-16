@@ -10,6 +10,7 @@ import Reports from './components/reports/Reports';
 import Search from './components/search/Search';
 import UserManagement from './components/admin/UserManagement';
 import BackupManager from './components/admin/BackupManager';
+import ProcedureTypeSettings from './components/admin/ProcedureTypeSettings';
 import ResearchModule from './components/research/ResearchModule';
 
 export const AppContext = createContext(null);
@@ -84,6 +85,7 @@ function ViewRenderer({ view, params }) {
     case 'research': return <ResearchModule />;
     case 'search': return <Search />;
     case 'users': return <UserManagement />;
+    case 'procedure-settings': return <ProcedureTypeSettings />;
     case 'backup': return <BackupManager />;
     default: return <Dashboard />;
   }

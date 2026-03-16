@@ -1,14 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../App';
 
-const PROCEDURE_TYPES = [
-  '', 'Carotid Endarterectomy', 'Carotid Artery Stenting', 'TCAR (Transcarotid Artery Revascularization)',
-  'EVAR (Endovascular Aortic Repair)', 'TEVAR (Thoracic EVAR)', 'Open AAA Repair',
-  'Peripheral Bypass', 'Peripheral Angioplasty/Stenting',
-  'Dialysis Access Creation', 'Dialysis Access Revision',
-  'Lower Extremity Amputation', 'Other Vascular Procedure'
-];
-
 export default function Search() {
   const { navigate } = useApp();
   const [tab, setTab] = useState('patients');
@@ -19,10 +11,12 @@ export default function Search() {
   });
   const [procedures, setProcedures] = useState([]);
   const [surgeons, setSurgeons] = useState([]);
+  const [procedureTypes, setProcedureTypes] = useState([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     loadSurgeons();
+    window.electronAPI.getProcedureTypes().then(r => { if (r.success) setProcedureTypes(r.data); });
   }, []);
 
   async function loadSurgeons() {
@@ -188,7 +182,8 @@ export default function Search() {
                   <label className="form-label">Procedure Type</label>
                   <select className="form-select" value={procFilters.procedureType}
                     onChange={e => setProcFilters(f => ({ ...f, procedureType: e.target.value }))}>
-                    {PROCEDURE_TYPES.map(t => <option key={t} value={t}>{t || 'All Types'}</option>)}
+                    <option value="">All Types</option>
+                    {procedureTypes.filter(t => t.active).map(t => <option key={t.type_id} value={t.name}>{t.name}</option>)}
                   </select>
                 </div>
                 <div className="form-group" style={{ minWidth: 150 }}>
