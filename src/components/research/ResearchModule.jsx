@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useApp } from '../../App';
 import {
   calcAge, summarize, computeP,
@@ -730,7 +730,7 @@ function Table1View({ data }) {
   const { rawA, rawB, groupALabel, groupBLabel } = data;
   const nA = rawA.length, nB = rawB?.length ?? 0;
   const twoGroup = rawB != null;
-  const rows = buildTable1Rows(rawA, rawB);
+  const rows = useMemo(() => buildTable1Rows(rawA, rawB), [rawA, rawB]);
 
   function buildCsvText() {
     const lines = [];
@@ -1073,17 +1073,17 @@ function Table2View({ data }) {
     return { events, n: rows.length, pct };
   }
 
-  const rows30 = TABLE2_30DAY.map(def => {
+  const rows30 = useMemo(() => TABLE2_30DAY.map(def => {
     const cA = count30(rowsA, def.key);
     const cB = twoGroup ? count30(rowsB, def.key) : null;
     const or = (twoGroup && cA && cB)
       ? oddsRatio(cA.events, cA.n - cA.events, cB.events, cB.n - cB.events)
       : null;
     return { ...def, cA, cB, or };
-  });
+  }), [rowsA, rowsB, twoGroup]);
 
   // ── TTE stats ─────────────────────────────────────────────────────────────
-  const rowsTTE = TABLE2_TTE.map(def => {
+  const rowsTTE = useMemo(() => TABLE2_TTE.map(def => {
     const tteA = buildTTEData(rowsA, def.eventDateKey);
     const tteB = twoGroup ? buildTTEData(rowsB, def.eventDateKey) : null;
     const kmA = kaplanMeier(tteA);
@@ -1095,7 +1095,7 @@ function Table2View({ data }) {
     const lr = (twoGroup && tteB) ? logRankTest(tteA, tteB) : null;
     const cox = (twoGroup && tteB) ? coxPH(tteA, tteB) : null;
     return { ...def, tteA, tteB, kmA, kmB, medA, medB, eventsA, eventsB, lr, cox };
-  });
+  }), [rowsA, rowsB, twoGroup]);
 
   // ── Missingness map ───────────────────────────────────────────────────────
   const allRows = twoGroup ? [...rowsA, ...rowsB] : rowsA;

@@ -12,7 +12,8 @@ export default function Search() {
   const [procedures, setProcedures] = useState([]);
   const [surgeons, setSurgeons] = useState([]);
   const [procedureTypes, setProcedureTypes] = useState([]);
-  const [loading, setLoading] = useState(false);
+  const [loadingPatients, setLoadingPatients] = useState(false);
+  const [loadingProcs, setLoadingProcs] = useState(false);
 
   useEffect(() => {
     loadSurgeons();
@@ -24,33 +25,29 @@ export default function Search() {
     if (res.success) setSurgeons(res.data);
   }
 
-  const searchPatients = useCallback(async () => {
-    setLoading(true);
-    const res = await window.electronAPI.getPatients({ search: patientSearch });
-    if (res.success) setPatients(res.data);
-    setLoading(false);
-  }, [patientSearch]);
-
-  const searchProcedures = useCallback(async () => {
-    setLoading(true);
-    const res = await window.electronAPI.getProcedures(procFilters);
-    if (res.success) setProcedures(res.data);
-    setLoading(false);
-  }, [procFilters]);
+  useEffect(() => {
+    if (tab !== 'patients') return;
+    const t = setTimeout(async () => {
+      setLoadingPatients(true);
+      try {
+        const res = await window.electronAPI.getPatients({ search: patientSearch });
+        if (res.success) setPatients(res.data);
+      } finally { setLoadingPatients(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [tab, patientSearch]);
 
   useEffect(() => {
-    if (tab === 'patients') {
-      const t = setTimeout(searchPatients, 300);
-      return () => clearTimeout(t);
-    }
-  }, [tab, searchPatients]);
-
-  useEffect(() => {
-    if (tab === 'procedures') {
-      const t = setTimeout(searchProcedures, 300);
-      return () => clearTimeout(t);
-    }
-  }, [tab, searchProcedures]);
+    if (tab !== 'procedures') return;
+    const t = setTimeout(async () => {
+      setLoadingProcs(true);
+      try {
+        const res = await window.electronAPI.getProcedures(procFilters);
+        if (res.success) setProcedures(res.data);
+      } finally { setLoadingProcs(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [tab, procFilters]);
 
   function calcAge(dob) {
     if (!dob) return '—';
@@ -100,7 +97,7 @@ export default function Search() {
               <span className="badge badge-info">{patients.length} patient{patients.length !== 1 ? 's' : ''}</span>
             </div>
             <div className="table-container" style={{ border: 'none' }}>
-              {loading ? (
+              {loadingPatients ? (
                 <div className="empty-state"><div>Searching...</div></div>
               ) : patients.length === 0 ? (
                 <div className="empty-state">
@@ -226,7 +223,7 @@ export default function Search() {
               <span className="badge badge-info">{procedures.length} result{procedures.length !== 1 ? 's' : ''}</span>
             </div>
             <div className="table-container" style={{ border: 'none' }}>
-              {loading ? (
+              {loadingProcs ? (
                 <div className="empty-state"><div>Searching...</div></div>
               ) : procedures.length === 0 ? (
                 <div className="empty-state">
