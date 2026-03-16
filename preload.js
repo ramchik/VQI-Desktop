@@ -24,6 +24,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateFollowup: (id, data) => ipcRenderer.invoke('followup:update', { id, data }),
   deleteFollowup: (id) => ipcRenderer.invoke('followup:delete', id),
 
+  // Nosology groups
+  getNosologyGroups: () => ipcRenderer.invoke('nosology:getAll'),
+  createNosologyGroup: (data) => ipcRenderer.invoke('nosology:create', data),
+  updateNosologyGroup: (id, data) => ipcRenderer.invoke('nosology:update', { id, data }),
+  deleteNosologyGroup: (id) => ipcRenderer.invoke('nosology:delete', id),
+
+  // Procedure types
+  getProcedureTypes: () => ipcRenderer.invoke('procedureTypes:getAll'),
+  createProcedureType: (data) => ipcRenderer.invoke('procedureTypes:create', data),
+  updateProcedureType: (id, data) => ipcRenderer.invoke('procedureTypes:update', { id, data }),
+  deleteProcedureType: (id) => ipcRenderer.invoke('procedureTypes:delete', id),
+
   // Surgeons
   getSurgeons: () => ipcRenderer.invoke('surgeons:getAll'),
   createSurgeon: (data) => ipcRenderer.invoke('surgeons:create', data),

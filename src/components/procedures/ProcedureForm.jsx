@@ -2,36 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useApp } from '../../App';
 import WoundPhotos from '../photos/WoundPhotos';
 
-const PROCEDURE_TYPES = [
-  'Carotid Endarterectomy',
-  'Carotid Artery Stenting',
-  'TCAR (Transcarotid Artery Revascularization)',
-  'EVAR (Endovascular Aortic Repair)',
-  'TEVAR (Thoracic EVAR)',
-  'Open AAA Repair',
-  'Open Thoracoabdominal Aortic Repair',
-  'Peripheral Bypass',
-  'Peripheral Angioplasty/Stenting',
-  'Visceral/Renal Revascularization',
-  'Lower Extremity Amputation',
-  'Upper Extremity Amputation',
-  'Dialysis Access Creation',
-  'Dialysis Access Revision',
-  'Thrombectomy/Embolectomy',
-  'Varicose Vein Ablation (EVLA/RFA)',
-  'Phlebectomy',
-  'Sclerotherapy',
-  'Venous Stenting',
-  'Deep Venous Reconstruction',
-  'Fasciotomy',
-  'Other Vascular Procedure'
-];
-
-const CAROTID_TYPES = ['Carotid Endarterectomy','Carotid Artery Stenting','TCAR (Transcarotid Artery Revascularization)'];
-const EVAR_TYPES = ['EVAR (Endovascular Aortic Repair)','TEVAR (Thoracic EVAR)','Open AAA Repair','Open Thoracoabdominal Aortic Repair'];
-const PAD_TYPES = ['Peripheral Bypass','Peripheral Angioplasty/Stenting','Lower Extremity Amputation'];
-const DIALYSIS_TYPES = ['Dialysis Access Creation','Dialysis Access Revision'];
-const VENOUS_TYPES = ['Varicose Vein Ablation (EVLA/RFA)','Phlebectomy','Sclerotherapy','Venous Stenting','Deep Venous Reconstruction'];
+// Procedure types and nosology modules are loaded from the database at runtime.
 
 const EMPTY_PROC = {
   patient_id: '', procedure_type: '', procedure_date: new Date().toISOString().slice(0,10),
@@ -108,6 +79,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
   const { navigate, notify } = useApp();
   const [tab, setTab] = useState('procedure');
   const [surgeons, setSurgeons] = useState([]);
+  const [allProcedureTypes, setAllProcedureTypes] = useState([]);
   const [proc, setProc] = useState({ ...EMPTY_PROC, patient_id: patientId || '' });
   const [intraop, setIntraop] = useState(EMPTY_INTRAOP);
   const [postop, setPostop] = useState(EMPTY_POSTOP);
@@ -124,13 +96,15 @@ export default function ProcedureForm({ procedureId, patientId }) {
 
   const isEdit = !!procedureId;
   const procType = proc.procedure_type;
-  const showCarotid = CAROTID_TYPES.includes(procType);
-  const showEvar = EVAR_TYPES.includes(procType);
-  const showPad = PAD_TYPES.includes(procType);
-  const showVenous = VENOUS_TYPES.includes(procType);
+  const typesByModule = (mod) => allProcedureTypes.filter(t => t.module === mod && t.active).map(t => t.name);
+  const showCarotid = typesByModule('carotid').includes(procType);
+  const showEvar    = typesByModule('evar').includes(procType);
+  const showPad     = typesByModule('pad').includes(procType);
+  const showVenous  = typesByModule('venous').includes(procType);
 
   useEffect(() => {
     loadSurgeons();
+    loadProcedureTypes();
     if (procedureId) loadProcedure();
   }, [procedureId]);
 
@@ -145,6 +119,11 @@ export default function ProcedureForm({ procedureId, patientId }) {
   async function loadSurgeons() {
     const res = await window.electronAPI.getSurgeons();
     if (res.success) setSurgeons(res.data);
+  }
+
+  async function loadProcedureTypes() {
+    const res = await window.electronAPI.getProcedureTypes();
+    if (res.success) setAllProcedureTypes(res.data);
   }
 
   async function loadProcedure() {
@@ -315,7 +294,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
         ))}
       </div>
 
-      {tab === 'procedure' && <ProcedureInfoTab proc={proc} setProc={setProc} surgeons={surgeons} setF={setF(setProc)}
+      {tab === 'procedure' && <ProcedureInfoTab proc={proc} setProc={setProc} surgeons={surgeons} allProcedureTypes={allProcedureTypes} setF={setF(setProc)}
         selectedPatient={selectedPatient} patientSearch={patientSearch} onPatientSearch={searchPatients}
         patientResults={patientResults} showPatientDropdown={showPatientDropdown}
         onSelectPatient={selectPatient} onCloseDropdown={() => setShowPatientDropdown(false)} />}
@@ -332,7 +311,7 @@ export default function ProcedureForm({ procedureId, patientId }) {
   );
 }
 
-function ProcedureInfoTab({ proc, setProc, surgeons, setF, selectedPatient, patientSearch, onPatientSearch, patientResults, showPatientDropdown, onSelectPatient, onCloseDropdown }) {
+function ProcedureInfoTab({ proc, setProc, surgeons, allProcedureTypes, setF, selectedPatient, patientSearch, onPatientSearch, patientResults, showPatientDropdown, onSelectPatient, onCloseDropdown }) {
   return (
     <div className="card">
       <div className="card-body">
@@ -373,7 +352,7 @@ function ProcedureInfoTab({ proc, setProc, surgeons, setF, selectedPatient, pati
             <select className="form-select" value={proc.procedure_type}
               onChange={e => setF('procedure_type', e.target.value)}>
               <option value="">Select procedure type...</option>
-              {PROCEDURE_TYPES.map(t => <option key={t}>{t}</option>)}
+              {allProcedureTypes.filter(t => t.active).map(t => <option key={t.type_id} value={t.name}>{t.name}</option>)}
             </select>
           </div>
 

@@ -7,20 +7,13 @@ const AGE_FROM_DOB = (dob) => {
   return Math.floor(diff / (1000 * 60 * 60 * 24 * 365.25));
 };
 
-const NOSOLOGY_CATEGORIES = {
-  Carotid:  { label: 'Carotid',  color: '#3b82f6', bg: '#eff6ff', types: ['Carotid Endarterectomy','Carotid Artery Stenting','TCAR (Transcarotid Artery Revascularization)'] },
-  Aortic:   { label: 'Aortic',   color: '#ef4444', bg: '#fef2f2', types: ['EVAR (Endovascular Aortic Repair)','TEVAR (Thoracic EVAR)','Open AAA Repair','Open Thoracoabdominal Aortic Repair'] },
-  PAD:      { label: 'PAD',      color: '#f97316', bg: '#fff7ed', types: ['Peripheral Bypass','Peripheral Angioplasty/Stenting','Lower Extremity Amputation','Upper Extremity Amputation'] },
-  Venous:   { label: 'Venous',   color: '#8b5cf6', bg: '#f5f3ff', types: ['Varicose Vein Ablation (EVLA/RFA)','Phlebectomy','Sclerotherapy','Venous Stenting','Deep Venous Reconstruction'] },
-  Dialysis: { label: 'Dialysis', color: '#10b981', bg: '#ecfdf5', types: ['Dialysis Access Creation','Dialysis Access Revision'] },
-};
-
-function getNosologyBadges(procedureTypesStr) {
-  if (!procedureTypesStr) return [];
-  const types = procedureTypesStr.split(',');
-  return Object.entries(NOSOLOGY_CATEGORIES)
-    .filter(([, cat]) => types.some(t => cat.types.includes(t)))
-    .map(([key, cat]) => ({ key, ...cat }));
+function getNosologyBadges(procedureTypesStr, nosologyGroups, procedureTypes) {
+  if (!procedureTypesStr || !nosologyGroups.length) return [];
+  const usedTypes = new Set(procedureTypesStr.split(','));
+  const hitGroupIds = new Set(
+    procedureTypes.filter(pt => usedTypes.has(pt.name)).map(pt => pt.nosology_group_id).filter(Boolean)
+  );
+  return nosologyGroups.filter(g => hitGroupIds.has(g.group_id) && g.active);
 }
 
 export default function PatientList() {
@@ -30,6 +23,8 @@ export default function PatientList() {
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState({ sex: '', nosology: '' });
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [nosologyGroups, setNosologyGroups] = useState([]);
+  const [procedureTypes, setProcedureTypes] = useState([]);
 
   const loadPatients = useCallback(async () => {
     setLoading(true);
@@ -40,6 +35,11 @@ export default function PatientList() {
       setLoading(false);
     }
   }, [search, filters]);
+
+  useEffect(() => {
+    window.electronAPI.getNosologyGroups().then(r => { if (r.success) setNosologyGroups(r.data); });
+    window.electronAPI.getProcedureTypes().then(r => { if (r.success) setProcedureTypes(r.data); });
+  }, []);
 
   useEffect(() => {
     const timer = setTimeout(loadPatients, 300);
@@ -103,11 +103,9 @@ export default function PatientList() {
             onChange={e => setFilters(f => ({ ...f, nosology: e.target.value }))}
           >
             <option value="">All Nosologies</option>
-            <option value="Carotid">Carotid</option>
-            <option value="Aortic">Aortic</option>
-            <option value="PAD">PAD</option>
-            <option value="Venous">Venous</option>
-            <option value="Dialysis">Dialysis</option>
+            {nosologyGroups.filter(g => g.active).map(g => (
+              <option key={g.group_id} value={g.name}>{g.name}</option>
+            ))}
           </select>
           <button className="btn btn-ghost btn-sm" onClick={() => { setSearch(''); setFilters({ sex: '', nosology: '' }); }}>
             Clear
@@ -188,14 +186,14 @@ export default function PatientList() {
                     </td>
                     <td>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                        {getNosologyBadges(p.procedure_types).map(cat => (
-                          <span key={cat.key} style={{
+                        {getNosologyBadges(p.procedure_types, nosologyGroups, procedureTypes).map(g => (
+                          <span key={g.group_id} style={{
                             display: 'inline-block', padding: '1px 7px', borderRadius: 10,
                             fontSize: '0.72rem', fontWeight: 600,
-                            color: cat.color, background: cat.bg,
-                            border: `1px solid ${cat.color}40`
+                            color: g.color, background: g.bg_color,
+                            border: `1px solid ${g.color}40`
                           }}>
-                            {cat.label}
+                            {g.name}
                           </span>
                         ))}
                         {!p.procedure_types && <span style={{ color: '#94a3b8', fontSize: '0.82rem' }}>—</span>}

@@ -145,6 +145,48 @@ ipcMain.handle('followup:delete', async (_, id) => {
   catch (e) { return { success: false, error: e.message }; }
 });
 
+// Nosology groups
+ipcMain.handle('nosology:getAll', async () => {
+  try { return { success: true, data: dbModule().getNosologyGroups() }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('nosology:create', async (_, data) => {
+  try { return { success: true, data: dbModule().createNosologyGroup(data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('nosology:update', async (_, { id, data }) => {
+  try { return { success: true, data: dbModule().updateNosologyGroup(id, data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('nosology:delete', async (_, id) => {
+  try { return { success: true, data: dbModule().deleteNosologyGroup(id) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+// Procedure types
+ipcMain.handle('procedureTypes:getAll', async () => {
+  try { return { success: true, data: dbModule().getProcedureTypes() }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('procedureTypes:create', async (_, data) => {
+  try { return { success: true, data: dbModule().createProcedureType(data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('procedureTypes:update', async (_, { id, data }) => {
+  try { return { success: true, data: dbModule().updateProcedureType(id, data) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
+ipcMain.handle('procedureTypes:delete', async (_, id) => {
+  try { return { success: true, data: dbModule().deleteProcedureType(id) }; }
+  catch (e) { return { success: false, error: e.message }; }
+});
+
 // Surgeons
 ipcMain.handle('surgeons:getAll', async () => {
   try { return { success: true, data: dbModule().getSurgeons() }; }

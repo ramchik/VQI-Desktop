@@ -375,6 +375,24 @@ CREATE TABLE IF NOT EXISTS procedure_photos (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS nosology_groups (
+  group_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  color TEXT NOT NULL DEFAULT '#64748b',
+  bg_color TEXT NOT NULL DEFAULT '#f1f5f9',
+  sort_order INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS procedure_types (
+  type_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  nosology_group_id INTEGER REFERENCES nosology_groups(group_id) ON DELETE SET NULL,
+  module TEXT CHECK(module IN ('carotid','evar','pad','venous','dialysis',NULL)),
+  sort_order INTEGER DEFAULT 0,
+  active INTEGER DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   log_id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER REFERENCES users(user_id),

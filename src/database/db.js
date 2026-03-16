@@ -41,6 +41,52 @@ function seedDefaultData() {
     insertSurgeon.run('Sarah', 'Johnson', 'Vascular Surgery');
     insertSurgeon.run('Michael', 'Davis', 'Vascular Surgery');
   }
+
+  const nosologyExists = db.prepare('SELECT group_id FROM nosology_groups LIMIT 1').get();
+  if (!nosologyExists) {
+    const insertGroup = db.prepare(
+      `INSERT INTO nosology_groups (name, color, bg_color, sort_order) VALUES (?,?,?,?)`
+    );
+    const groups = [
+      ['Carotid',  '#3b82f6', '#eff6ff', 1],
+      ['Aortic',   '#ef4444', '#fef2f2', 2],
+      ['PAD',      '#f97316', '#fff7ed', 3],
+      ['Venous',   '#8b5cf6', '#f5f3ff', 4],
+      ['Dialysis', '#10b981', '#ecfdf5', 5],
+      ['Other',    '#64748b', '#f8fafc', 6],
+    ];
+    groups.forEach(g => insertGroup.run(...g));
+
+    const gid = (name) => db.prepare('SELECT group_id FROM nosology_groups WHERE name = ?').get(name).group_id;
+    const insertType = db.prepare(
+      `INSERT INTO procedure_types (name, nosology_group_id, module, sort_order) VALUES (?,?,?,?)`
+    );
+    const types = [
+      ['Carotid Endarterectomy',                  gid('Carotid'),  'carotid', 1],
+      ['Carotid Artery Stenting',                 gid('Carotid'),  'carotid', 2],
+      ['TCAR (Transcarotid Artery Revascularization)', gid('Carotid'), 'carotid', 3],
+      ['EVAR (Endovascular Aortic Repair)',        gid('Aortic'),   'evar',    4],
+      ['TEVAR (Thoracic EVAR)',                    gid('Aortic'),   'evar',    5],
+      ['Open AAA Repair',                          gid('Aortic'),   'evar',    6],
+      ['Open Thoracoabdominal Aortic Repair',      gid('Aortic'),   'evar',    7],
+      ['Peripheral Bypass',                        gid('PAD'),      'pad',     8],
+      ['Peripheral Angioplasty/Stenting',          gid('PAD'),      'pad',     9],
+      ['Lower Extremity Amputation',               gid('PAD'),      'pad',     10],
+      ['Upper Extremity Amputation',               gid('PAD'),      null,      11],
+      ['Dialysis Access Creation',                 gid('Dialysis'), 'dialysis',12],
+      ['Dialysis Access Revision',                 gid('Dialysis'), 'dialysis',13],
+      ['Varicose Vein Ablation (EVLA/RFA)',         gid('Venous'),  'venous',  14],
+      ['Phlebectomy',                              gid('Venous'),   'venous',  15],
+      ['Sclerotherapy',                            gid('Venous'),   'venous',  16],
+      ['Venous Stenting',                          gid('Venous'),   'venous',  17],
+      ['Deep Venous Reconstruction',               gid('Venous'),   'venous',  18],
+      ['Visceral/Renal Revascularization',         gid('Other'),    null,      19],
+      ['Thrombectomy/Embolectomy',                 gid('Other'),    null,      20],
+      ['Fasciotomy',                               gid('Other'),    null,      21],
+      ['Other Vascular Procedure',                 gid('Other'),    null,      22],
+    ];
+    types.forEach(t => insertType.run(...t));
+  }
 }
 
 // ─── AUTH ────────────────────────────────────────────────────────────────────
@@ -56,14 +102,6 @@ function loginUser(username, password) {
 }
 
 // ─── PATIENTS ────────────────────────────────────────────────────────────────
-
-const NOSOLOGY_PROCEDURE_TYPES = {
-  Carotid: ['Carotid Endarterectomy', 'Carotid Artery Stenting', 'TCAR (Transcarotid Artery Revascularization)'],
-  Aortic:  ['EVAR (Endovascular Aortic Repair)', 'TEVAR (Thoracic EVAR)', 'Open AAA Repair', 'Open Thoracoabdominal Aortic Repair'],
-  PAD:     ['Peripheral Bypass', 'Peripheral Angioplasty/Stenting', 'Lower Extremity Amputation', 'Upper Extremity Amputation'],
-  Venous:  ['Varicose Vein Ablation (EVLA/RFA)', 'Phlebectomy', 'Sclerotherapy', 'Venous Stenting', 'Deep Venous Reconstruction'],
-  Dialysis: ['Dialysis Access Creation', 'Dialysis Access Revision'],
-};
 
 function getPatients(filters = {}) {
   let query = `
@@ -81,10 +119,15 @@ function getPatients(filters = {}) {
     params.push(s, s, s);
   }
   if (filters.sex) { query += ` AND p.sex = ?`; params.push(filters.sex); }
-  if (filters.nosology && NOSOLOGY_PROCEDURE_TYPES[filters.nosology]) {
-    const types = NOSOLOGY_PROCEDURE_TYPES[filters.nosology];
-    query += ` AND EXISTS (SELECT 1 FROM procedures pr WHERE pr.patient_id = p.patient_id AND pr.procedure_type IN (${types.map(() => '?').join(',')}))`;
-    params.push(...types);
+  if (filters.nosology) {
+    const group = db.prepare('SELECT group_id FROM nosology_groups WHERE name = ? AND active = 1').get(filters.nosology);
+    if (group) {
+      const types = db.prepare('SELECT name FROM procedure_types WHERE nosology_group_id = ? AND active = 1').all(group.group_id).map(r => r.name);
+      if (types.length > 0) {
+        query += ` AND EXISTS (SELECT 1 FROM procedures pr WHERE pr.patient_id = p.patient_id AND pr.procedure_type IN (${types.map(() => '?').join(',')}))`;
+        params.push(...types);
+      }
+    }
   }
   query += ` ORDER BY p.last_name, p.first_name`;
   if (filters.limit) { query += ` LIMIT ? OFFSET ?`; params.push(filters.limit, filters.offset || 0); }
@@ -355,6 +398,60 @@ function updateFollowup(followupId, data) {
 
 function deleteFollowup(followupId) {
   db.prepare('DELETE FROM followup WHERE followup_id = ?').run(followupId);
+  return { success: true };
+}
+
+// ─── NOSOLOGY GROUPS & PROCEDURE TYPES ───────────────────────────────────────
+
+function getNosologyGroups() {
+  return db.prepare('SELECT * FROM nosology_groups ORDER BY sort_order, name').all();
+}
+
+function createNosologyGroup(data) {
+  const result = db.prepare(
+    `INSERT INTO nosology_groups (name, color, bg_color, sort_order) VALUES (@name, @color, @bg_color, @sort_order)`
+  ).run({ sort_order: 99, ...data });
+  return { group_id: result.lastInsertRowid };
+}
+
+function updateNosologyGroup(groupId, data) {
+  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE nosology_groups SET ${fields} WHERE group_id = @group_id`)
+    .run({ ...data, group_id: groupId });
+  return { success: true };
+}
+
+function deleteNosologyGroup(groupId) {
+  db.prepare('UPDATE procedure_types SET nosology_group_id = NULL WHERE nosology_group_id = ?').run(groupId);
+  db.prepare('DELETE FROM nosology_groups WHERE group_id = ?').run(groupId);
+  return { success: true };
+}
+
+function getProcedureTypes() {
+  return db.prepare(`
+    SELECT pt.*, ng.name AS nosology_name, ng.color, ng.bg_color
+    FROM procedure_types pt
+    LEFT JOIN nosology_groups ng ON pt.nosology_group_id = ng.group_id
+    ORDER BY pt.sort_order, pt.name
+  `).all();
+}
+
+function createProcedureType(data) {
+  const result = db.prepare(
+    `INSERT INTO procedure_types (name, nosology_group_id, module, sort_order) VALUES (@name, @nosology_group_id, @module, @sort_order)`
+  ).run({ sort_order: 99, module: null, nosology_group_id: null, ...data });
+  return { type_id: result.lastInsertRowid };
+}
+
+function updateProcedureType(typeId, data) {
+  const fields = Object.keys(data).map(k => `${k} = @${k}`).join(', ');
+  db.prepare(`UPDATE procedure_types SET ${fields} WHERE type_id = @type_id`)
+    .run({ ...data, type_id: typeId });
+  return { success: true };
+}
+
+function deleteProcedureType(typeId) {
+  db.prepare('DELETE FROM procedure_types WHERE type_id = ?').run(typeId);
   return { success: true };
 }
 
@@ -1056,6 +1153,8 @@ module.exports = {
   getPatients, getPatientById, createPatient, updatePatient, deletePatient,
   getProcedures, getProcedureById, createProcedure, updateProcedure, deleteProcedure,
   getFollowups, createFollowup, updateFollowup, deleteFollowup,
+  getNosologyGroups, createNosologyGroup, updateNosologyGroup, deleteNosologyGroup,
+  getProcedureTypes, createProcedureType, updateProcedureType, deleteProcedureType,
   getSurgeons, createSurgeon, updateSurgeon,
   getUsers, createUser, updateUser, deleteUser,
   getDashboardStats, getReportData,
