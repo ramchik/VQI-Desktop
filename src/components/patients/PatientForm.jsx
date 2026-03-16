@@ -48,11 +48,11 @@ export default function PatientForm({ patientId, defaultTab }) {
     setLoading(true);
     const res = await window.electronAPI.getPatientById(patientId);
     if (res.success && res.data) {
-      const d = res.data;
-      setPatient({ ...EMPTY_PATIENT, ...stripNulls(d) });
-      if (d.comorbidities) setComorbidities({ ...EMPTY_COMORBIDITIES, ...stripNulls(d.comorbidities) });
-      if (d.medications) setMedications({ ...EMPTY_MEDICATIONS, ...stripNulls(d.medications) });
-      if (d.procedures) setProcedures(d.procedures);
+      const { comorbidities, medications, procedures: procs, ...patientFields } = res.data;
+      setPatient({ ...EMPTY_PATIENT, ...stripNulls(patientFields) });
+      if (comorbidities) setComorbidities({ ...EMPTY_COMORBIDITIES, ...stripNulls(comorbidities) });
+      if (medications) setMedications({ ...EMPTY_MEDICATIONS, ...stripNulls(medications) });
+      if (procs) setProcedures(procs);
     }
     setLoading(false);
   }

@@ -20,7 +20,12 @@ export function useApp() {
 }
 
 export default function App() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem('vqi_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
   const [view, setView] = useState('dashboard');
   const [viewParams, setViewParams] = useState({});
   const [notification, setNotification] = useState(null);
@@ -41,14 +46,20 @@ export default function App() {
     setNotification({ message, type });
   }
 
+  function handleLogin(u) {
+    sessionStorage.setItem('vqi_user', JSON.stringify(u));
+    setUser(u);
+  }
+
   function handleLogout() {
+    sessionStorage.removeItem('vqi_user');
     setUser(null);
     setView('dashboard');
     setViewParams({});
   }
 
   if (!user) {
-    return <Login onLogin={setUser} />;
+    return <Login onLogin={handleLogin} />;
   }
 
   const contextValue = { user, navigate, notify };
