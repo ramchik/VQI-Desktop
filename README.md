@@ -58,6 +58,49 @@ users
 audit_log
 ```
 
+## Download (Windows .exe)
+
+### Option 1 — GitHub Releases (recommended)
+
+1. Go to the [**Releases**](../../releases) page of this repository.
+2. Under the latest release, expand **Assets**.
+3. Download one of:
+   - **`VQI-Desktop-Setup-x.x.x.exe`** — NSIS installer (installs to Program Files, adds Start Menu & Desktop shortcuts)
+   - **`VQI-Desktop-Portable-x.x.x.exe`** — single-file portable exe, no installation needed
+4. Run the downloaded file and follow the on-screen prompts.
+
+> **No internet required after installation.** All data is stored locally on your machine.
+
+### Option 2 — Build from source
+
+If no pre-built release is available, build the installer yourself:
+
+**Prerequisites:**
+- [Node.js](https://nodejs.org/) v18 or later
+- Windows 10/11 (required to build `.exe` targets)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/VQI-Desktop.git
+cd VQI-Desktop
+
+# 2. Install dependencies (also rebuilds native modules for Electron)
+npm install
+
+# 3. Build the React bundle + package the installer
+npm run dist:win
+```
+
+Output files appear in the **`release/`** folder:
+| File | Description |
+|------|-------------|
+| `VQI-Desktop-Setup-1.0.0.exe` | NSIS installer |
+| `VQI-Desktop-Portable-1.0.0.exe` | Portable single-file exe |
+
+Run either file to start using the application.
+
+---
+
 ## Installation
 
 ```bash
